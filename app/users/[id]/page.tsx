@@ -576,6 +576,10 @@ const UserProfilePage: React.FC = () => {
   const gamesWonRateText = gamesWonRatePct == null
     ? "-"
     : `${gamesWon}/${gamesPlayed} (${Number(gamesWonRatePct).toFixed(1).replace(/\.0$/, "")}%)`;
+  const losses =
+    gamesPlayed != null
+      ? Math.max(0, gamesPlayed - gamesWon)
+      : null;
   const averageScoreRaw = user?.averageScorePerRound;
   const averageScore =
     averageScoreRaw == null || !Number.isFinite(Number(averageScoreRaw))
@@ -611,6 +615,16 @@ const UserProfilePage: React.FC = () => {
                 <div className="profile-row">
                   <span className="profile-key">Username</span>
                   <span className="profile-value">{user.username ?? "-"}</span>
+                </div>
+                <div className="profile-row">
+                  <span className="profile-key">Avg Score</span>
+                  <span className="profile-value">{averageScore}</span>
+                </div>
+                <div className="profile-row">
+                  <span className="profile-key">Losses</span>
+                  <span className="profile-value">
+                    {losses == null ? "-" : losses}
+                  </span>
                 </div>
                 <div className="profile-row">
                   <span className="profile-key">Creation Date</span>
