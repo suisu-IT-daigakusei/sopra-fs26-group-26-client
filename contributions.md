@@ -164,10 +164,12 @@ reason).
 | **suisu-IT-daigakusei** | 05.05.2026 | https://github.com/liun777/sopra-fs26-group-26-client/commit/3476401bb21d38ddc422b347f42df20557029417 | #38 Implementation 0.9 | Note: Unfinished due to backend results not working rn. TLDR: #38 implementation, changes to user profile, dashboard & user list, midgame scoreboard, post cabo reveal scoreboard (changed order too), preparation for #40 (button) |
 
 
-## Contributions Week 7 - [Begin Date] to [End Date]
+## Contributions Week 7 - [06.05.2026] to [12.05.2026]
 | **Student**        | **Date** | **Link to Commit** | **Description**                 | **Relevance**                       |
 | ------------------ | -------- | ------------------ | ------------------------------- | ----------------------------------- |
- **@** |xx.xx.2026  |link | .  | .|
+| **@uIiana** | 09.05.2026   | https://github.com/liun777/sopra-fs26-group-26-server/commit/87c1c4a024b2b1b9bfb50631cb1c953c400e6915 | Implemented move privacy attributes on: move and user entities, user DTOs. Wrote various tests. Closes [#109](https://github.com/liun777/sopra-fs26-group-26-server/issues/109) | Serves as a foundation for move privacy related functionality. Tests the implementation. |
+| **@uIiana** | 09.05.2026   | https://github.com/liun777/sopra-fs26-group-26-server/commit/c5679669a166e2a2a6c32d7b561644618b28a5e8 |  Implemented <br>- Move controller with the GET /sessions/{sessionId}/log endpoint <br> - Move service with an underlying logic method getSessionLog <br> - MoveLogEntryDTO for communication with client <br> - Wrote 2 tests for move service <br> - Corrected a user service test for [#109](https://github.com/liun777/sopra-fs26-group-26-server/issues/109) <br><br> Closes [#111](https://github.com/liun777/sopra-fs26-group-26-server/issues/111) | Implements core functionality for querying session move logs. Tests the implementation. |
+| **@uIiana** | 10.05.2026 | https://github.com/liun777/sopra-fs26-group-26-server/commit/a003dd987261e68c51e0372127bcdbefffa0abec | Implemented:<br> - SPECTATING user status <br> - REST endpoint for joining as spectator: POST /lobbies/{sessionId}/spectators <br> - Service logic for the REST endpoint: joinLobbyAsSpectator and leaveOtherPlayingSpectatorMemberships <br> - Participant based queries in lobby repository (valid for players and spectators) <br> - Adjusted numerous lobby and user service methods to accommodate for spectators <br> - Wrote 2 lobby service tests and 1 user service test <br> - Adjusted existing tests based on new functionality <br><br> Closes [#116](https://github.com/liun777/sopra-fs26-group-26-server/issues/116)  | Implements core functionality for joining as spectator and spectators having an isolated flow from players. Tests the implementation. |
 
 
 
