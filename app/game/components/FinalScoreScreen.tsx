@@ -40,9 +40,9 @@ function toScoreText(value: number | null): string {
 }
 
 function toOverallPlaceText(rank: number): string {
-    if (rank === 1) return "\uD83E\uDD47 1.";
-    if (rank === 2) return "\uD83E\uDD48 2.";
-    if (rank === 3) return "\uD83E\uDD49 3.";
+    if (rank === 1) return "\uD83E\uDD47";
+    if (rank === 2) return "\uD83E\uDD48";
+    if (rank === 3) return "\uD83E\uDD49";
     if (rank === 4) return "4.";
     return `${rank}.`;
 }

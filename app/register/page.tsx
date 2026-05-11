@@ -5,6 +5,7 @@ import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import { Button, Form, Input } from "antd";
+import { beginAuthRouteTransition } from "@/components/authRouteTransition";
 
 interface FormFieldProps {
     username: string;
@@ -81,7 +82,8 @@ const Register: React.FC = () => {
                 setUserId(String(response.id));
             }
 
-            window.location.assign("/dashboard");
+            beginAuthRouteTransition("/dashboard", "register");
+            router.replace("/dashboard");
         } catch (error) {
             if (error instanceof Error) {
                 alert(`Registration failed:\n${error.message}`);

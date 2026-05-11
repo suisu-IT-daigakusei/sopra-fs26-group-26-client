@@ -1,9 +1,9 @@
-import CardShuffleLoader from "./components/CardShuffleLoader";
+import GeneralLoadingAnimation from "./components/GeneralLoadingAnimation";
 
 export default function Loading() {
   return (
     <div className="page-transition-loader-overlay page-transition-loader-overlay-static">
-      <CardShuffleLoader />
+      <GeneralLoadingAnimation className="auth-route-loader-frame" />
     </div>
   );
 }

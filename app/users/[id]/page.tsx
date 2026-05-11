@@ -1,12 +1,14 @@
 "use client"; // all users, even oneself, uses this page now, reworked as a result
 
 import React, { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { ApplicationError } from "@/types/error";
 import { User } from "@/types/user";
 import { toPresenceKey, toPresenceLabel } from "@/utils/presence";
+import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
@@ -19,6 +21,8 @@ const WINNER_CROWN = "\uD83D\uDC51";
 type ProfileResultRow = {
   key: string;
   lobbyCode: string;
+  historySessionCode: string | null;
+  winnerUserId: string | null;
   playedAtText: string;
   playedAtSort: number;
   roundsText: string;
@@ -33,6 +37,8 @@ type ProfileResultRow = {
 const EMPTY_RESULTS_ROW: ProfileResultRow = {
   key: "__NO_RESULTS__",
   lobbyCode: "-",
+  historySessionCode: null,
+  winnerUserId: null,
   playedAtText: "-",
   playedAtSort: 0,
   roundsText: "-",
@@ -44,8 +50,36 @@ const EMPTY_RESULTS_ROW: ProfileResultRow = {
   isEmptyState: true,
 };
 
+function toDigitsOnly(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+function toPlayedAtSearchToken(sortValue: number): string {
+  if (!Number.isFinite(sortValue) || sortValue <= 0) {
+    return "";
+  }
+
+  const date = new Date(sortValue);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = String(date.getFullYear());
+  return `${day}${month}${year}`;
+}
+
 function normalizeLower(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function isPlaceholderWinnerName(value: unknown): boolean {
+  const name = String(value ?? "").trim();
+  if (!name || name === "-") {
+    return true;
+  }
+  return /^user\s+\d+$/i.test(name);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -242,7 +276,7 @@ function toProfileResultRows(
     const sessionRecord = asRecord(record.session);
     const lobbyRecord = asRecord(record.lobby);
 
-    const lobbyCode = String(
+    const historySessionCode = String(
       record.sessionId ??
       record.lobbyCode ??
       record.code ??
@@ -252,7 +286,8 @@ function toProfileResultRows(
       lobbyRecord?.code ??
       record.lobbyId ??
       "",
-    ).trim() || "-";
+    ).trim();
+    const lobbyCode = historySessionCode || "-";
 
     const playedAtRaw =
       record.playedAt ??
@@ -322,6 +357,8 @@ function toProfileResultRows(
     rows.push({
       key: `${lobbyCode}-${playedAt.sortValue}-${index}`,
       lobbyCode,
+      historySessionCode: historySessionCode || null,
+      winnerUserId: winnerId || null,
       playedAtText: playedAt.text,
       playedAtSort: playedAt.sortValue,
       roundsText: toReadableRounds(rounds),
@@ -346,7 +383,10 @@ const resultsColumns: TableProps<ProfileResultRow>["columns"] = [
     title: "Date Played",
     dataIndex: "playedAtText",
     key: "playedAtText",
+    width: 188,
     ellipsis: true,
+    className: "profile-results-col-date",
+    onHeaderCell: () => ({ className: "profile-results-head-date" }),
     sorter: (a, b) => a.playedAtSort - b.playedAtSort,
     render: (value: string, row) => (row.isEmptyState ? "-" : value),
   },
@@ -354,18 +394,38 @@ const resultsColumns: TableProps<ProfileResultRow>["columns"] = [
     title: "Lobby Code",
     dataIndex: "lobbyCode",
     key: "lobbyCode",
+    width: 112,
     ellipsis: true,
-    render: (value: string, row) => (
-      <span className="table-ellipsis-text" title={row.isEmptyState ? "" : value}>
-        {row.isEmptyState ? "-" : value}
-      </span>
-    ),
+    className: "profile-results-col-lobby",
+    onHeaderCell: () => ({ className: "profile-results-head-lobby" }),
+    render: (value: string, row) => {
+      const historyCode = String(row.historySessionCode ?? "").trim();
+      if (row.isEmptyState || historyCode.length === 0) {
+        return (
+          <span className="table-ellipsis-text" title={row.isEmptyState ? "" : value}>
+            {row.isEmptyState ? "-" : value}
+          </span>
+        );
+      }
+
+      return (
+        <span
+          className="table-ellipsis-text profile-results-history-link"
+          title={`Open move history for ${historyCode}`}
+        >
+          {value}
+        </span>
+      );
+    },
   },
   {
     title: "Rounds",
     dataIndex: "roundsText",
     key: "roundsText",
+    width: 84,
     align: "center",
+    className: "profile-results-col-rounds",
+    onHeaderCell: () => ({ className: "profile-results-head-rounds" }),
     sorter: (a, b) => (a.roundsSort ?? -1) - (b.roundsSort ?? -1),
     render: (value: string, row) => (row.isEmptyState ? "-" : value),
   },
@@ -373,7 +433,10 @@ const resultsColumns: TableProps<ProfileResultRow>["columns"] = [
     title: "Score",
     dataIndex: "scoreText",
     key: "scoreText",
+    width: 80,
     align: "center",
+    className: "profile-results-col-score",
+    onHeaderCell: () => ({ className: "profile-results-head-score" }),
     sorter: (a, b) => (a.scoreSort ?? -1) - (b.scoreSort ?? -1),
     render: (value: string, row) => (row.isEmptyState ? "-" : value),
   },
@@ -382,7 +445,7 @@ const resultsColumns: TableProps<ProfileResultRow>["columns"] = [
     dataIndex: "winnerName",
     key: "winnerName",
     align: "right",
-    ellipsis: true,
+    ellipsis: false,
     render: (value: string, row) => {
       if (row.isEmptyState) {
         return <span className="profile-results-empty-text">{NO_RESULTS_TEXT}</span>;
@@ -412,9 +475,13 @@ const UserProfilePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
   const [editingBio, setEditingBio] = useState(false);
+  const [savingBio, setSavingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState("");
   const [resultsRaw, setResultsRaw] = useState<unknown>([]);
   const [loadingResults, setLoadingResults] = useState(false);
+  const [resultsLobbyCodeQuery, setResultsLobbyCodeQuery] = useState("");
+  const [resultsDateQuery, setResultsDateQuery] = useState("");
+  const [winnerNameByUserId, setWinnerNameByUserId] = useState<Record<string, string>>({});
 
   const viewedUserId = String(params?.id ?? "").trim();
   const ownUserId = String(storedUserId ?? "").trim();
@@ -462,6 +529,7 @@ const UserProfilePage: React.FC = () => {
     if (!viewedUserId) {
       setResultsRaw([]);
       setLoadingResults(false);
+      setWinnerNameByUserId({});
       return;
     }
 
@@ -541,6 +609,196 @@ const UserProfilePage: React.FC = () => {
     return rows.length > 0 ? rows : [EMPTY_RESULTS_ROW];
   }, [resultsRaw, viewedUserId, ownUserId, user?.username]);
 
+  const filteredResultsRows = useMemo(() => {
+    const lobbyCodeQuery = resultsLobbyCodeQuery.trim().toLowerCase();
+    const dateQueryDigits = toDigitsOnly(resultsDateQuery.trim());
+    const hasFilters = lobbyCodeQuery.length > 0 || dateQueryDigits.length > 0;
+
+    if (!hasFilters) {
+      return resultsRows;
+    }
+
+    if (resultsRows.length === 1 && resultsRows[0].isEmptyState) {
+      return resultsRows;
+    }
+
+    return resultsRows.filter((row) => {
+      if (row.isEmptyState) {
+        return false;
+      }
+
+      const lobbyCodeMatches =
+        lobbyCodeQuery.length === 0 ||
+        row.lobbyCode.toLowerCase().includes(lobbyCodeQuery);
+      if (!lobbyCodeMatches) {
+        return false;
+      }
+
+      if (dateQueryDigits.length === 0) {
+        return true;
+      }
+
+      const playedAtToken = toPlayedAtSearchToken(row.playedAtSort);
+      const playedAtTextDigits = toDigitsOnly(row.playedAtText);
+
+      return (
+        playedAtToken.includes(dateQueryDigits) ||
+        playedAtTextDigits.includes(dateQueryDigits)
+      );
+    });
+  }, [resultsRows, resultsLobbyCodeQuery, resultsDateQuery]);
+
+  useEffect(() => {
+    const preferredViewedName = String(user?.username ?? "").trim();
+    const seededWinnerNames: Record<string, string> = {};
+
+    if (viewedUserId && preferredViewedName.length > 0) {
+      seededWinnerNames[viewedUserId] = preferredViewedName;
+    }
+
+    resultsRows.forEach((row) => {
+      if (row.isEmptyState || !row.winnerUserId) {
+        return;
+      }
+      const candidateName = String(row.winnerName ?? "").trim();
+      if (isPlaceholderWinnerName(candidateName)) {
+        return;
+      }
+      seededWinnerNames[row.winnerUserId] = candidateName;
+    });
+
+    setWinnerNameByUserId((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      Object.entries(seededWinnerNames).forEach(([id, name]) => {
+        if (!name || (next[id] && next[id].trim().length > 0)) {
+          return;
+        }
+        next[id] = name;
+        changed = true;
+      });
+      return changed ? next : previous;
+    });
+
+    const unresolvedWinnerIds = Array.from(
+      new Set(
+        resultsRows
+          .filter((row) => !row.isEmptyState && row.winnerUserId)
+          .filter((row) => isPlaceholderWinnerName(row.winnerName))
+          .map((row) => String(row.winnerUserId)),
+      ),
+    ).filter((winnerId) => {
+      const cachedName = String(winnerNameByUserId[winnerId] ?? "").trim();
+      return cachedName.length === 0;
+    });
+
+    if (unresolvedWinnerIds.length === 0) {
+      return;
+    }
+
+    let active = true;
+    void Promise.all(
+      unresolvedWinnerIds.map(async (winnerId) => {
+        try {
+          const fetchedUser = await apiService.get<User>(`/users/${encodeURIComponent(winnerId)}`);
+          const winnerName = String(fetchedUser?.username ?? fetchedUser?.name ?? "").trim();
+          return [winnerId, winnerName] as const;
+        } catch {
+          return [winnerId, ""] as const;
+        }
+      }),
+    ).then((resolvedEntries) => {
+      if (!active) {
+        return;
+      }
+      setWinnerNameByUserId((previous) => {
+        let changed = false;
+        const next = { ...previous };
+        resolvedEntries.forEach(([winnerId, winnerName]) => {
+          if (!winnerName || next[winnerId]) {
+            return;
+          }
+          next[winnerId] = winnerName;
+          changed = true;
+        });
+        return changed ? next : previous;
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [apiService, resultsRows, user?.username, viewedUserId, winnerNameByUserId]);
+
+  const displayResultsRows = useMemo(
+    () => filteredResultsRows.map((row) => {
+      if (row.isEmptyState || !row.winnerUserId) {
+        return row;
+      }
+      const winnerName = String(winnerNameByUserId[row.winnerUserId] ?? "").trim();
+      if (!winnerName) {
+        return row;
+      }
+      return {
+        ...row,
+        winnerName,
+      };
+    }),
+    [filteredResultsRows, winnerNameByUserId],
+  );
+
+  const hasActiveResultsFilters =
+    resultsLobbyCodeQuery.trim().length > 0 || resultsDateQuery.trim().length > 0;
+
+  const handleSaveBio = async () => {
+    if (!isOwnProfile || !user || savingBio) {
+      return;
+    }
+
+    const normalizedDraft = bioDraft.trim();
+    const nextBio = normalizedDraft.length > 0 && normalizedDraft !== DEFAULT_BIO
+      ? normalizedDraft
+      : "";
+    const authToken = String(token ?? "").trim();
+    let persisted = false;
+    let persistErrorMessage = "";
+
+    setSavingBio(true);
+    try {
+      if (authToken.length > 0) {
+        await apiService.putWithAuth<void>(
+          `/users/${encodeURIComponent(viewedUserId)}`,
+          { bio: nextBio },
+          authToken,
+        );
+      } else {
+        await apiService.put<void>(
+          `/users/${encodeURIComponent(viewedUserId)}`,
+          { bio: nextBio },
+        );
+      }
+      persisted = true;
+    } catch (error) {
+      persistErrorMessage = error instanceof Error ? error.message : "Unknown error";
+    } finally {
+      setSavingBio(false);
+      setUser((previous) => (
+        previous
+          ? {
+              ...previous,
+              bio: nextBio,
+            }
+          : previous
+      ));
+      setEditingBio(false);
+      setBioDraft(nextBio || DEFAULT_BIO);
+    }
+
+    if (!persisted) {
+      alert(`Bio update could not be persisted to backend.\n${persistErrorMessage || "Please try again."}`);
+    }
+  };
+
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
@@ -551,7 +809,17 @@ const UserProfilePage: React.FC = () => {
 
   const creationDate = user?.creationDate ?? "-";
   const rank = user?.overallRank ?? "-";
-  const roundsPlayedRaw = user?.roundsPlayed;
+  const derivedPlayedStats = useMemo(
+    () => derivePlayedStatsFromHistoryPayload(resultsRaw, viewedUserId),
+    [resultsRaw, viewedUserId],
+  );
+  const roundsPlayedRaw = (
+    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+  )?.roundsPlayed ?? (
+    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+  )?.rounds ?? (
+    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+  )?.roundCount ?? derivedPlayedStats.roundsPlayed;
   const roundsPlayed = Number.isFinite(Number(roundsPlayedRaw))
     ? Number(roundsPlayedRaw)
     : null;
@@ -567,7 +835,7 @@ const UserProfilePage: React.FC = () => {
     user as User & { gamesPlayed?: number | null; games?: number | null }
   )?.gamesPlayed ?? (
     user as User & { gamesPlayed?: number | null; games?: number | null }
-  )?.games;
+  )?.games ?? derivedPlayedStats.gamesPlayed;
   const gamesPlayed = Number.isFinite(Number(gamesPlayedRaw))
     ? Number(gamesPlayedRaw)
     : null;
@@ -599,7 +867,7 @@ const UserProfilePage: React.FC = () => {
             className="dashboard-container"
             title={
               <div className="lobby-section-title-row">
-                <span className="dashboard-section-title">User Profile</span>
+                <span className="dashboard-section-title">{user?.username?.trim() || "User Profile"}</span>
                 {!loading && user ? (
                   <span
                     className={`users-status-pill users-status-${profilePresenceKey} profile-title-status`}
@@ -612,9 +880,83 @@ const UserProfilePage: React.FC = () => {
           >
             {!loading && user ? (
               <div className="profile-grid">
-                <div className="profile-row">
-                  <span className="profile-key">Username</span>
-                  <span className="profile-value">{user.username ?? "-"}</span>
+                <div className="profile-hero-row">
+                  <div className="profile-hero-avatar-wrap" aria-hidden="true">
+                    <Image
+                      src="/char01_profile.png"
+                      alt=""
+                      width={156}
+                      height={156}
+                      className="profile-hero-avatar"
+                    />
+                  </div>
+                  <div className="profile-hero-content">
+                    <div className="profile-row">
+                      <span className="profile-key">Username</span>
+                      <span className="profile-value">{user.username ?? "-"}</span>
+                    </div>
+                    <div className="profile-bio-head">
+                      <span className="profile-key">Bio</span>
+                      <span className="profile-bio-head-actions">
+                        {isOwnProfile ? (
+                          editingBio ? (
+                            <>
+                              <Button
+                                type="primary"
+                                className="profile-bio-inline-btn"
+                                loading={savingBio}
+                                onClick={() => {
+                                  void handleSaveBio();
+                                }}
+                              >
+                                Save Bio
+                              </Button>
+                              <Button
+                                type="default"
+                                className="profile-bio-inline-btn"
+                                disabled={savingBio}
+                                onClick={() => {
+                                  setEditingBio(false);
+                                  setBioDraft(shownBio);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="default"
+                              className="profile-bio-edit-btn profile-bio-inline-btn"
+                              onClick={() => {
+                                setBioDraft(shownBio);
+                                setEditingBio(true);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                          )
+                        ) : null}
+                      </span>
+                    </div>
+                    <div className="profile-hero-bio-content">
+                      {isOwnProfile && editingBio ? ( //can only see edit and edit if own profile
+                        <div className="profile-bio-editor">
+                          <Input.TextArea
+                            rows={4}
+                            value={bioDraft}
+                            onChange={(event) => setBioDraft(event.target.value)}
+                            maxLength={BIO_MAX_LENGTH}
+                            showCount
+                            placeholder="Write a short bio"
+                          />
+                        </div>
+                      ) : (
+                        <p className={`profile-bio-text${isDefaultBio ? " profile-bio-text-placeholder" : ""}`}>
+                          {shownBio}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 <div className="profile-row">
                   <span className="profile-key">Avg Score</span>
@@ -639,68 +981,12 @@ const UserProfilePage: React.FC = () => {
                   <span className="profile-value">{roundsPlayedText}</span>
                 </div>
                 <div className="profile-row">
-                  <span className="profile-key">Avg Score</span>
-                  <span className="profile-value">{averageScore}</span>
-                </div>
-                <div className="profile-row">
                   <span className="profile-key">Rounds Won %</span>
                   <span className="profile-value">{roundsWonRateText}</span>
                 </div>
                 <div className="profile-row">
                   <span className="profile-key">Games Won %</span>
                   <span className="profile-value">{gamesWonRateText}</span>
-                </div>
-
-                <div className="profile-bio-block">
-                  <div className="profile-bio-head">
-                    <span className="profile-key">Bio</span>
-                    {isOwnProfile && !editingBio ? (
-                      <Button
-                        type="default"
-                        className="profile-bio-edit-btn"
-                        onClick={() => {
-                          setBioDraft(shownBio);
-                          setEditingBio(true);
-                        }}
-                      >
-                        Edit
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  {isOwnProfile && editingBio ? ( //can only see edit and edit if own profile
-                    <div className="profile-bio-editor">
-                      <Input.TextArea
-                        rows={4}
-                        value={bioDraft}
-                        onChange={(event) => setBioDraft(event.target.value)}
-                        maxLength={BIO_MAX_LENGTH}
-                        showCount
-                        placeholder="Write a short bio"
-                      />
-                      <div className="profile-bio-actions">
-                        <Button
-                          type="primary"
-                          disabled
-                        >
-                          Save Bio
-                        </Button>
-                        <Button
-                          type="default"
-                          onClick={() => {
-                            setEditingBio(false);
-                            setBioDraft(shownBio);
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className={`profile-bio-text${isDefaultBio ? " profile-bio-text-placeholder" : ""}`}>
-                      {shownBio}
-                    </p>
-                  )}
                 </div>
               </div>
             ) : null}
@@ -719,13 +1005,40 @@ const UserProfilePage: React.FC = () => {
             title={
               <div className="lobby-section-title-row">
                 <span className="dashboard-section-title">Results</span>
+                <Button
+                  type="default"
+                  size="small"
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      window.location.reload();
+                    }
+                  }}
+                >
+                  Refresh
+                </Button>
               </div>
             }
-          > 
+          >
+            <div className="profile-results-filters">
+              <Input
+                allowClear
+                className="users-overview-search"
+                placeholder="Search Lobby Code"
+                value={resultsLobbyCodeQuery}
+                onChange={(event) => setResultsLobbyCodeQuery(event.target.value)}
+              />
+              <Input
+                allowClear
+                className="users-overview-search"
+                placeholder="Search Date Played (DDMMYYYY)"
+                value={resultsDateQuery}
+                onChange={(event) => setResultsDateQuery(event.target.value)}
+              />
+            </div>
             <Table<ProfileResultRow>
               className="users-overview-table profile-results-table responsive-list-table"
               columns={resultsColumns}
-              dataSource={resultsRows}
+              dataSource={displayResultsRows}
               rowKey="key"
               size="small"
               tableLayout="fixed"
@@ -738,8 +1051,30 @@ const UserProfilePage: React.FC = () => {
                 position: ["bottomCenter"],
               }}
               rowClassName={() => "profile-results-row"}
+              onRow={(row) => {
+                const historyCode = String(row.historySessionCode ?? "").trim();
+                if (row.isEmptyState || historyCode.length === 0) {
+                  return {};
+                }
+                return {
+                  onClick: () => {
+                    router.push(`/history/${encodeURIComponent(historyCode)}`);
+                  },
+                  onKeyDown: (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      router.push(`/history/${encodeURIComponent(historyCode)}`);
+                    }
+                  },
+                  tabIndex: 0,
+                  role: "link",
+                  style: { cursor: "pointer" },
+                };
+              }}
               locale={{
-                emptyText: NO_RESULTS_TEXT,
+                emptyText: hasActiveResultsFilters
+                  ? "No results match the current search."
+                  : NO_RESULTS_TEXT,
               }}
             />
           </Card>

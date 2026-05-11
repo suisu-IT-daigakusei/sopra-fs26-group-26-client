@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 
+const LOCAL_STORAGE_SYNC_EVENT = "local-storage-sync";
+
+function dispatchLocalStorageSync(key: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<string>(LOCAL_STORAGE_SYNC_EVENT, { detail: key }),
+  );
+}
+
 interface LocalStorage<T> {
   value: T;
   set: (newVal: T) => void;
@@ -55,11 +67,43 @@ export default function useLocalStorage<T>(
     setValue(readStoredValue());
   }, [readStoredValue]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncFromStorage = () => {
+      setValue(readStoredValue());
+    };
+
+    const onStorageEvent = (event: StorageEvent) => {
+      if (event.key === null || event.key === key) {
+        syncFromStorage();
+      }
+    };
+
+    const onCustomSync = (event: Event) => {
+      const custom = event as CustomEvent<string>;
+      if (typeof custom.detail !== "string" || custom.detail === key) {
+        syncFromStorage();
+      }
+    };
+
+    window.addEventListener("storage", onStorageEvent);
+    window.addEventListener(LOCAL_STORAGE_SYNC_EVENT, onCustomSync as EventListener);
+
+    return () => {
+      window.removeEventListener("storage", onStorageEvent);
+      window.removeEventListener(LOCAL_STORAGE_SYNC_EVENT, onCustomSync as EventListener);
+    };
+  }, [key, readStoredValue]);
+
   // Simple setter updating state & localStorage
   const set = useCallback((newVal: T) => {
     setValue(newVal);
     if (typeof window !== "undefined") {
       globalThis.localStorage.setItem(key, JSON.stringify(newVal));
+      dispatchLocalStorageSync(key);
     }
   }, [key]);
 
@@ -68,6 +112,7 @@ export default function useLocalStorage<T>(
     setValue(defaultValue);
     if (typeof window !== "undefined") {
       globalThis.localStorage.removeItem(key);
+      dispatchLocalStorageSync(key);
     }
   }, [defaultValue, key]);
 

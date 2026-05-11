@@ -120,9 +120,9 @@ const openLobbyColumns: TableProps<OpenLobbyRow>["columns"] = [
         title: "Host",
         dataIndex: "hostLabel",
         key: "hostLabel",
-        ellipsis: true,
+        ellipsis: false,
         render: (value: string, row) => (
-            <span className="table-ellipsis-text" title={row.isEmptyState ? "" : value}>
+            <span className="users-username-cell" title={row.isEmptyState ? "" : value}>
                 {row.isEmptyState ? "" : value}
             </span>
         ),

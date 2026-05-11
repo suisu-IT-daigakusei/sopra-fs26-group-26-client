@@ -6,6 +6,7 @@ import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import { Button, Form, Input } from "antd";
+import { beginAuthRouteTransition } from "@/components/authRouteTransition";
 // Optionally, you can import a CSS module or file for additional styling:
 // import styles from "@/styles/page.module.css";
 
@@ -85,11 +86,11 @@ const Login: React.FC = () => {
       }
 
       if (response.id) {
-        setUserId(String(response.id))
+        setUserId(String(response.id));
       }
 
-      // Full navigation so layout (e.g. invite notifications) remounts and reads token from storage
-      window.location.assign("/dashboard");
+      beginAuthRouteTransition("/dashboard", "login");
+      router.replace("/dashboard");
     } catch (error) {
       if (error instanceof Error) {
         alert(`Wrong username or password. Please try again.`); // vorher: `Something went wrong during the login:\n${error.message}

@@ -36,8 +36,8 @@ function toPlaceBadge(rank: number): string {
     if (rank === 1) return "\uD83E\uDD47";
     if (rank === 2) return "\uD83E\uDD48";
     if (rank === 3) return "\uD83E\uDD49";
-    if (rank === 4) return "\uD83C\uDFC5";
-    return String(rank);
+    if (rank === 4) return "4.";
+    return `${rank}.`;
 }
 
 function sortPlayersByScore(players: PlayerScoreResolved[], scoreByUserId: Record<number, number | null>): PlayerScoreResolved[] {
@@ -92,10 +92,9 @@ const Scores: React.FC<ScoresProps> = ({
     // Current-scores view intentionally excludes the running/current round.
     const completedRoundsForScores = Math.max(0, resolvedTotalRounds - 1);
     const hasRanking = completedRoundsForScores > 0;
-    const showEarlyRoundsSummaryColumn = completedRoundsForScores > 2;
-    const showPreviousRoundColumn = completedRoundsForScores >= 2;
+    const showEarlyRoundsSummaryColumn = completedRoundsForScores >= 2;
     const scoreColumnCount = completedRoundsForScores > 0
-        ? (showEarlyRoundsSummaryColumn ? 1 : 0) + (showPreviousRoundColumn ? 1 : 0) + 1
+        ? (showEarlyRoundsSummaryColumn ? 2 : 1)
         : 1;
     const scoreGroupLabel = scoreColumnCount <= 1 ? "Score" : "Scores";
 
@@ -160,12 +159,12 @@ const Scores: React.FC<ScoresProps> = ({
         if (!showEarlyRoundsSummaryColumn || !hasRanking) {
             return "-";
         }
-        const earlyRoundValues = player.roundScores.slice(0, completedRoundsForScores - 2);
+        const earlyRoundValues = player.roundScores.slice(0, completedRoundsForScores - 1);
         const numericEarlyRoundValues = earlyRoundValues.filter(
             (value): value is number => value != null,
         );
         if (
-            earlyRoundValues.length !== Math.max(0, completedRoundsForScores - 2) ||
+            earlyRoundValues.length !== Math.max(0, completedRoundsForScores - 1) ||
             numericEarlyRoundValues.length !== earlyRoundValues.length
         ) {
             return "-";
@@ -195,8 +194,8 @@ const Scores: React.FC<ScoresProps> = ({
         }
 
         const delta = previousRank - currentRank;
-        if (delta > 0) return { text: `\u2191 ${delta}`, className: "final-score-movement-up" };
-        if (delta < 0) return { text: `\u2193 ${Math.abs(delta)}`, className: "final-score-movement-down" };
+        if (delta > 0) return { text: "\u2191".repeat(delta), className: "final-score-movement-up" };
+        if (delta < 0) return { text: "\u2193".repeat(Math.abs(delta)), className: "final-score-movement-down" };
         return { text: "-", className: "final-score-movement-neutral" };
     };
 
@@ -213,7 +212,6 @@ const Scores: React.FC<ScoresProps> = ({
                         <colgroup>
                             <col className="final-score-col-place" />
                             <col className="final-score-col-username" />
-                            <col className="final-score-col-delta" />
                             {Array.from({ length: scoreColumnCount }).map((_, index) => (
                                 <col key={`score-col-${index}`} />
                             ))}
@@ -223,7 +221,6 @@ const Scores: React.FC<ScoresProps> = ({
                             <tr>
                                 <th className="final-score-col-place final-score-col-place-head"></th>
                                 <th className="final-score-col-username final-score-col-username-head">Username</th>
-                                <th className="final-score-col-delta"></th>
                                 <th colSpan={scoreColumnCount}>{scoreGroupLabel}</th>
                                 <th className="final-score-col-total final-score-col-total-head">Total Scores</th>
                             </tr>
@@ -242,17 +239,14 @@ const Scores: React.FC<ScoresProps> = ({
                                             <span className={`final-score-player-name${hasRanking && rank === 1 ? " final-score-player-name-leading" : ""}`}>
                                                 {player.username}
                                             </span>
-                                        </td>
-                                        <td className="final-score-col-delta">
-                                            <span className={movement.className}>{movement.text}</span>
+                                            {movement.text !== "-" ? (
+                                                <span className={`final-score-inline-movement ${movement.className}`}>{movement.text}</span>
+                                            ) : null}
                                         </td>
                                         {hasRanking ? (
                                             <>
                                                 {showEarlyRoundsSummaryColumn ? (
                                                     <td>{getEarlyRoundsSummaryText(player)}</td>
-                                                ) : null}
-                                                {showPreviousRoundColumn ? (
-                                                    <td>{getRoundScoreText(player, completedRoundsForScores === 2 ? 0 : completedRoundsForScores - 2)}</td>
                                                 ) : null}
                                                 <td>{getRoundScoreText(player, completedRoundsForScores - 1)}</td>
                                             </>

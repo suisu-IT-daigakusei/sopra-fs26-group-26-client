@@ -8,6 +8,7 @@ import GameReconnectPrompt from "./GameReconnectPrompt";
 import "./styles/globals.css";
 import DisconnectHandler from "./components/DisconnectHandler";
 import PageTransitionLoader from "./components/PageTransitionLoader";
+import AuthRouteLoadingOverlay from "./components/AuthRouteLoadingOverlay";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -68,6 +69,7 @@ export default function RootLayout({
           <AntdRegistry>
             <AntdApp>
               <DisconnectHandler />
+              <AuthRouteLoadingOverlay />
               <Suspense fallback={null}>
                 <PageTransitionLoader />
               </Suspense>

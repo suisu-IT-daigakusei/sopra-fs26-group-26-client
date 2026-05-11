@@ -155,6 +155,7 @@ export class ApiService {
       globalThis.localStorage.removeItem("token");
       globalThis.localStorage.removeItem("userId");
       globalThis.localStorage.removeItem("activeSessionId");
+      globalThis.localStorage.removeItem("activeLobbySessionId");
       globalThis.localStorage.removeItem("pendingInitialPeekGameId");
     } catch {
       // best-effort cleanup only

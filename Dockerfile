@@ -11,7 +11,8 @@ RUN npm ci --loglevel=error
 # Copy app (useless stuff is ignored by .dockerignore)
 COPY . .
 # Build the app
-RUN node --no-opt ./node_modules/next/dist/bin/next build
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
 
 # Use small production image
 FROM node:20-alpine
@@ -24,12 +25,16 @@ RUN npm config set cache /app/.npm-cache --global
 # Install runtime dependencies only
 COPY package*.json ./
 RUN npm ci --omit=dev --loglevel=error
-# Get non-root user
-USER 3301
 # Copy app build output
 COPY --chown=3301:3301 --from=build /app/.next .next
 COPY --chown=3301:3301 --from=build /app/public public
 COPY --chown=3301:3301 --from=build /app/package.json package.json
+# Ensure runtime user can write Next.js image/cache directories
+RUN mkdir -p /app/.next/cache/images \
+  && chown -R 3301:3301 /app/.next /app/public /app/.npm-cache /app/node_modules \
+  && chmod -R u+rwX /app/.next
+# Get non-root user
+USER 3301
 # Expose port for serve
 EXPOSE 3000
 # Start app

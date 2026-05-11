@@ -33,7 +33,7 @@ type WaitingView = {
   turnSeconds?: number;
   abilityRevealSeconds?: number;
   abilitySwapSeconds?: number;
-  rematchDecisionSeconds?: number;
+  absentRoundPoints?: number;
   players?: WaitingRow[];
 };
 
@@ -51,6 +51,11 @@ type GameStateSignal = {
 
 type ActiveGameResponse = {
   gameId?: string | null;
+};
+
+type ActiveGameStatusSnapshot = {
+  gameId?: string | null;
+  status?: string | null;
 };
 
 type Player = {
@@ -83,7 +88,7 @@ type LobbyTimerSettings = {
   turnSeconds: number;
   abilityRevealSeconds: number;
   abilitySwapSeconds: number;
-  rematchDecisionSeconds: number;
+  absentRoundPoints: number;
 };
 
 const MAX_ACTIVE_INVITES = 10; // CAN BE CHANGED, set to 10 to avoid users spamming invites, but enough for legit cases
@@ -97,7 +102,7 @@ const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
   turnSeconds: 30,
   abilityRevealSeconds: 5,
   abilitySwapSeconds: 10,
-  rematchDecisionSeconds: 60,
+  absentRoundPoints: 20,
 };
 
 const TIMER_LIMITS = {
@@ -107,7 +112,7 @@ const TIMER_LIMITS = {
   turnSeconds: { min: 10, max: 60 },
   abilityRevealSeconds: { min: 3, max: 10 },
   abilitySwapSeconds: { min: 5, max: 30 },
-  rematchDecisionSeconds: { min: 10, max: 60 },
+  absentRoundPoints: { min: 0, max: 100 },
 } as const;
 
 function clampTimerValue(
@@ -352,7 +357,12 @@ function WaitingLobbyContent() {
   const { value: userId } = useLocalStorage<string>("userId", "");
   const normalizedUserId = String(userId).trim();
   const { set: setActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
+  const { set: setActiveLobbySessionId } = useLocalStorage<string>("activeLobbySessionId", "");
   const { set: setPendingInitialPeekGameId } = useLocalStorage<string>("pendingInitialPeekGameId", "");
+  const { set: setActiveGameStatusSnapshot } = useLocalStorage<ActiveGameStatusSnapshot | null>(
+    "activeGameStatusSnapshot",
+    null,
+  );
   const onlineUsers = useOnlineUsersTopic();
   const { sentEntries, loadSent, markPending } = useOutgoingInviteStatuses(
     userId,
@@ -394,19 +404,31 @@ function WaitingLobbyContent() {
     if (!gameId) {
       return;
     }
+    const lobbySessionId = sessionIdParam.trim();
     const status = normalizeValue(rawStatus ?? "");
     setLaunchingGame((isAlreadyLaunching) => {
       if (isAlreadyLaunching) {
         return isAlreadyLaunching;
       }
+      setActiveGameStatusSnapshot({ gameId, status: status || null });
+      if (lobbySessionId) {
+        setActiveLobbySessionId(lobbySessionId);
+      }
       setActiveSessionId(gameId);
-      if (!status || status === "initial_peek" || forceInitialPeekBootstrap) {
+      if (status === "initial_peek" || forceInitialPeekBootstrap) {
         setPendingInitialPeekGameId(gameId);
       }
       router.push("/game");
       return true;
     });
-  }, [router, setActiveSessionId, setPendingInitialPeekGameId]);
+  }, [
+    router,
+    sessionIdParam,
+    setActiveGameStatusSnapshot,
+    setActiveLobbySessionId,
+    setActiveSessionId,
+    setPendingInitialPeekGameId,
+  ]);
 
   const tryLaunchFromActiveGameFallback = useCallback(async () => {
     const authToken = token.trim();
@@ -420,7 +442,7 @@ function WaitingLobbyContent() {
       );
       const activeGameId = extractGameId(activeGame);
       if (activeGameId) {
-        launchToGame(activeGameId, "initial_peek");
+        launchToGame(activeGameId);
       }
     } catch {
       // ignore temporary lookup failures
@@ -651,10 +673,10 @@ function WaitingLobbyContent() {
             "abilitySwapSeconds",
             previous.abilitySwapSeconds,
           ),
-          rematchDecisionSeconds: resolveTimerSettingFromView(
+          absentRoundPoints: resolveTimerSettingFromView(
             waitingView,
-            "rematchDecisionSeconds",
-            previous.rematchDecisionSeconds,
+            "absentRoundPoints",
+            previous.absentRoundPoints,
           ),
         };
 
@@ -665,7 +687,7 @@ function WaitingLobbyContent() {
           nextSettings.turnSeconds === previous.turnSeconds &&
           nextSettings.abilityRevealSeconds === previous.abilityRevealSeconds &&
           nextSettings.abilitySwapSeconds === previous.abilitySwapSeconds &&
-          nextSettings.rematchDecisionSeconds === previous.rematchDecisionSeconds;
+          nextSettings.absentRoundPoints === previous.absentRoundPoints;
 
         return unchanged ? previous : nextSettings;
       });
@@ -932,9 +954,10 @@ function WaitingLobbyContent() {
   useEffect(() => {
     const sid = sessionId.trim();
     if (sid) {
+      setActiveLobbySessionId(sid);
       setActiveSessionId(sid);
     }
-  }, [sessionId, setActiveSessionId]);
+  }, [sessionId, setActiveLobbySessionId, setActiveSessionId]);
 
   const handleInvite = (id: number) => {
     if (!userIsHost) {
@@ -1107,7 +1130,7 @@ function WaitingLobbyContent() {
       );
       const startedGameId = extractGameId(started);
       if (startedGameId) {
-        launchToGame(startedGameId, extractGameStatus(started), true);
+        launchToGame(startedGameId, extractGameStatus(started));
       }
     } catch (error: unknown) {
       const status = (error as ApplicationError)?.status;
@@ -1612,6 +1635,34 @@ function WaitingLobbyContent() {
                         }}
                       />
                       <span className="lobby-setting-row-value">{lobbyTimerSettings.abilitySwapSeconds}s</span>
+                    </div>
+                  </div>
+                  <div className="lobby-setting-row">
+                    <span className="lobby-setting-row-label">Absent Round Score (pts)</span>
+                    <div className="lobby-setting-row-control">
+                      <Slider
+                        min={TIMER_LIMITS.absentRoundPoints.min}
+                        max={TIMER_LIMITS.absentRoundPoints.max}
+                        step={1}
+                        marks={{
+                          [TIMER_LIMITS.absentRoundPoints.min]: String(TIMER_LIMITS.absentRoundPoints.min),
+                          20: "20",
+                          50: "50",
+                          [TIMER_LIMITS.absentRoundPoints.max]: String(TIMER_LIMITS.absentRoundPoints.max),
+                        }}
+                        value={lobbyTimerSettings.absentRoundPoints}
+                        disabled={updatingTimerKey === "absentRoundPoints"}
+                        onChange={(nextValue) => {
+                          const numeric = Array.isArray(nextValue) ? nextValue[0] : nextValue;
+                          const clamped = clampTimerValue("absentRoundPoints", Number(numeric));
+                          setLobbyTimerSettings((prev) => ({
+                            ...prev,
+                            absentRoundPoints: clamped,
+                          }));
+                          scheduleLobbyTimerSettingUpdate("absentRoundPoints", clamped);
+                        }}
+                      />
+                      <span className="lobby-setting-row-value">{lobbyTimerSettings.absentRoundPoints}</span>
                     </div>
                   </div>
                 </div>

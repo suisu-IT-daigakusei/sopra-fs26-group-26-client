@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { useApi } from "@/hooks/useApi";
 import { Button } from "antd";
 import useLocalStorage from "@/hooks/useLocalStorage";
@@ -85,6 +86,11 @@ type GameRuntimeConfigResponse = {
     caboRevealSeconds?: number | string | null;
     afkTimeoutSeconds?: number | string | null;
     rematchDecisionSeconds?: number | string | null;
+};
+
+type ActiveGameStatusSnapshot = {
+    gameId?: string | null;
+    status?: string | null;
 };
 
 type MoveZoneSignal = "DRAW_PILE" | "DISCARD_PILE" | "HAND";
@@ -172,6 +178,39 @@ function normalizeValue(value: unknown): string {
     return String(value ?? "").trim().toLowerCase();
 }
 
+function isPlaceholderPlayerName(value: unknown): boolean {
+    const label = String(value ?? "").trim();
+    return !label || /^player\s+\d+$/i.test(label);
+}
+
+function normalizeGameStatus(value: unknown): string {
+    const normalized = normalizeValue(value);
+    if (!normalized) {
+        return "";
+    }
+
+    const canonical = normalized.replace(/[\s-]+/g, "_");
+    switch (canonical) {
+        case "intro":
+        case "round_intro":
+        case "intro_phase":
+            return "intro";
+        case "initial_peek":
+        case "peek_phase":
+            return "initial_peek";
+        case "round_active":
+        case "normal_phase":
+            return "round_active";
+        case "cabo_reveal":
+            return "cabo_reveal";
+        case "round_awaiting_rematch":
+        case "scoreboard_and_rematch":
+            return "round_awaiting_rematch";
+        default:
+            return canonical;
+    }
+}
+
 function extractGameId(value: unknown): string {
     if (!value || typeof value !== "object") {
         return "";
@@ -198,7 +237,7 @@ function extractGameStatus(value: unknown): string {
     }
 
     const record = value as Record<string, unknown>;
-    const directStatus = normalizeValue(record.status ?? record.gameStatus ?? record.phase);
+    const directStatus = normalizeGameStatus(record.status ?? record.gameStatus ?? record.phase);
     if (directStatus) {
         return directStatus;
     }
@@ -209,7 +248,7 @@ function extractGameStatus(value: unknown): string {
     }
 
     const nestedRecord = nestedGame as Record<string, unknown>;
-    return normalizeValue(nestedRecord.status ?? nestedRecord.gameStatus ?? nestedRecord.phase);
+    return normalizeGameStatus(nestedRecord.status ?? nestedRecord.gameStatus ?? nestedRecord.phase);
 }
 
 function extractCurrentTurnUserId(value: unknown): number | null {
@@ -231,23 +270,48 @@ function extractCurrentTurnUserId(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
-function extractPlayerIds(value: unknown): number[] {
+function extractGameStateRecords(value: unknown): Record<string, unknown>[] {
     if (!value || typeof value !== "object") {
         return [];
     }
 
-    const record = value as Record<string, unknown>;
-    const candidates = record.players;
-    if (!Array.isArray(candidates)) {
-        return [];
-    }
-
-    const ids: number[] = [];
-    for (const entry of candidates) {
-        if (!entry || typeof entry !== "object") {
+    const root = value as Record<string, unknown>;
+    const records: Record<string, unknown>[] = [root];
+    const nestedKeys = ["game", "state", "data", "session"];
+    for (const key of nestedKeys) {
+        const nested = root[key];
+        if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
             continue;
         }
-        const playerRecord = entry as Record<string, unknown>;
+        records.push(nested as Record<string, unknown>);
+    }
+    return records;
+}
+
+function extractGameStatePlayers(value: unknown): Record<string, unknown>[] {
+    for (const record of extractGameStateRecords(value)) {
+        const playersRaw = record.players;
+        if (!Array.isArray(playersRaw)) {
+            continue;
+        }
+
+        const players = playersRaw
+            .map((entry) => (entry && typeof entry === "object" && !Array.isArray(entry)
+                ? entry as Record<string, unknown>
+                : null))
+            .filter((entry): entry is Record<string, unknown> => entry != null);
+
+        if (players.length > 0) {
+            return players;
+        }
+    }
+
+    return [];
+}
+
+function extractPlayerIds(value: unknown): number[] {
+    const ids: number[] = [];
+    for (const playerRecord of extractGameStatePlayers(value)) {
         const rawId = playerRecord.userId ?? playerRecord.id;
         if (rawId == null || rawId === "") {
             continue;
@@ -296,23 +360,8 @@ function getAfkWarningLeadSeconds(afkTimeoutSeconds: number): number {
 }
 
 function extractPlayerCardsById(value: unknown): Record<number, SeatCardView[]> {
-    if (!value || typeof value !== "object") {
-        return {};
-    }
-
-    const record = value as Record<string, unknown>;
-    const players = record.players;
-    if (!Array.isArray(players)) {
-        return {};
-    }
-
     const byId: Record<number, SeatCardView[]> = {};
-    for (const entry of players) {
-        if (!entry || typeof entry !== "object") {
-            continue;
-        }
-
-        const playerRecord = entry as Record<string, unknown>;
+    for (const playerRecord of extractGameStatePlayers(value)) {
         const rawId = playerRecord.userId ?? playerRecord.id;
         const parsedId = Number(rawId);
         if (!Number.isFinite(parsedId)) {
@@ -326,23 +375,8 @@ function extractPlayerCardsById(value: unknown): Record<number, SeatCardView[]> 
 }
 
 function extractTouchedHandIndicesByPlayerId(value: unknown): Record<number, number[]> {
-    if (!value || typeof value !== "object") {
-        return {};
-    }
-
-    const record = value as Record<string, unknown>;
-    const players = record.players;
-    if (!Array.isArray(players)) {
-        return {};
-    }
-
     const touchedById: Record<number, number[]> = {};
-    for (const entry of players) {
-        if (!entry || typeof entry !== "object") {
-            continue;
-        }
-
-        const playerRecord = entry as Record<string, unknown>;
+    for (const playerRecord of extractGameStatePlayers(value)) {
         const rawId = playerRecord.userId ?? playerRecord.id;
         const parsedId = Number(rawId);
         if (!Number.isFinite(parsedId)) {
@@ -791,16 +825,136 @@ function buildFinalRoundScoresSnapshot(
     return { players, totalRounds };
 }
 
+function toEpochMs(value: unknown): number {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        const milliseconds = value < 10_000_000_000 ? value * 1000 : value;
+        return Number.isFinite(milliseconds) ? milliseconds : 0;
+    }
+    const text = String(value ?? "").trim();
+    if (!text) {
+        return 0;
+    }
+    const parsedNumeric = Number(text);
+    if (Number.isFinite(parsedNumeric)) {
+        const milliseconds = parsedNumeric < 10_000_000_000 ? parsedNumeric * 1000 : parsedNumeric;
+        return Number.isFinite(milliseconds) ? milliseconds : 0;
+    }
+    const parsedDate = new Date(text).getTime();
+    return Number.isFinite(parsedDate) ? parsedDate : 0;
+}
+
+function extractSessionHistoryEntries(payload: unknown): Record<string, unknown>[] {
+    if (Array.isArray(payload)) {
+        return payload
+            .map((entry) => toPlainRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry != null);
+    }
+
+    const root = toPlainRecord(payload);
+    if (!root) {
+        return [];
+    }
+
+    const candidateArrays = [root.history, root.results, root.items, root.sessions];
+    for (const candidate of candidateArrays) {
+        if (!Array.isArray(candidate)) {
+            continue;
+        }
+        const entries = candidate
+            .map((entry) => toPlainRecord(entry))
+            .filter((entry): entry is Record<string, unknown> => entry != null);
+        if (entries.length > 0) {
+            return entries;
+        }
+    }
+
+    if (root.sessionId != null || root.totalScoreByUserId != null || root.userScoresPerRound != null) {
+        return [root];
+    }
+
+    return [];
+}
+
+function extractSessionHistoryCode(entry: Record<string, unknown>): string {
+    const nestedSession = toPlainRecord(entry.session);
+    return String(
+        entry.sessionId ??
+        nestedSession?.sessionId ??
+        entry.code ??
+        nestedSession?.code ??
+        "",
+    ).trim();
+}
+
+function selectSessionHistoryEntry(
+    entries: Record<string, unknown>[],
+    preferredSessionId: string,
+): Record<string, unknown> | null {
+    if (entries.length === 0) {
+        return null;
+    }
+
+    const preferredId = normalizeValue(preferredSessionId);
+    if (preferredId) {
+        const exactMatch = entries.find(
+            (entry) => normalizeValue(extractSessionHistoryCode(entry)) === preferredId
+        );
+        if (exactMatch) {
+            return exactMatch;
+        }
+    }
+
+    const orderedByDate = [...entries].sort((a, b) => {
+        const aTime = toEpochMs(a.startTime ?? a.playedAt ?? a.finishedAt ?? a.updatedAt ?? a.createdAt);
+        const bTime = toEpochMs(b.startTime ?? b.playedAt ?? b.finishedAt ?? b.updatedAt ?? b.createdAt);
+        return bTime - aTime;
+    });
+    return orderedByDate[0] ?? null;
+}
+
+function buildSessionHistoryScoresSnapshot(
+    payload: unknown,
+    preferredSessionId: string,
+    fallbackPlayerIds: number[],
+    playerNamesById: Record<number, string>,
+): { snapshot: FinalRoundScoresSnapshot; sessionCode: string } | null {
+    const entries = extractSessionHistoryEntries(payload);
+    const selectedEntry = selectSessionHistoryEntry(entries, preferredSessionId);
+    if (!selectedEntry) {
+        return null;
+    }
+
+    const snapshot = buildFinalRoundScoresSnapshot(
+        selectedEntry,
+        fallbackPlayerIds,
+        playerNamesById,
+    );
+    if (!snapshot) {
+        return null;
+    }
+
+    return {
+        snapshot,
+        sessionCode: extractSessionHistoryCode(selectedEntry),
+    };
+}
+
 const Game = () => {
   const apiService = useApi();
   const router = useRouter();
   const { value: activeSessionId, set: setActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
+  const { value: activeLobbySessionId, set: setActiveLobbySessionId } =
+      useLocalStorage<string>("activeLobbySessionId", "");
+  const { value: activeGameStatusSnapshot, set: setActiveGameStatusSnapshot } =
+      useLocalStorage<ActiveGameStatusSnapshot | null>("activeGameStatusSnapshot", null);
   const gameId = activeSessionId.trim();
+  const lobbySessionId = activeLobbySessionId.trim();
   const { value: token } = useLocalStorage<string>("token", "");
   const HAND_SIZE = 4; // referencing here, keeps it consistent and less prone to errors
   const TURN_CARD_DRAG_MIME = "application/x-cabo-turn-card";
   const DISCARD_PILE_SWAP_DRAG_MIME = "application/x-cabo-discard-pile-swap";
   const FLYING_CARD_ANIMATION_MS = 3000; // slower
+  const SESSION_SCORE_REFRESH_MS = 8000;
   const createHiddenPeekCards = () => Array(HAND_SIZE).fill(false); // hide card by default
 
 
@@ -838,10 +992,19 @@ const Game = () => {
       const [peekVisibleCards, setPeekVisibleCards] = useState<boolean[]>(createHiddenPeekCards);
       // #17: Peek Phase Timer
       const [isPeekPhase, setIsPeekPhase] = useState<boolean>(false);
+      const gameStatusSnapshotForCurrentGame = useMemo(() => {
+          if (!activeGameStatusSnapshot || !gameId) {
+              return "";
+          }
+          const snapshotGameId = String(activeGameStatusSnapshot.gameId ?? "").trim();
+          if (!snapshotGameId || snapshotGameId !== gameId) {
+              return "";
+          }
+          return normalizeGameStatus(activeGameStatusSnapshot.status);
+      }, [activeGameStatusSnapshot, gameId]);
       // #15: player's own hand
-      const { value: pendingInitialPeekGameId, clear: clearPendingInitialPeekGameId } =
-          useLocalStorage<string>("pendingInitialPeekGameId", "");
-      const [gameStatus, setGameStatus] = useState<string>("");
+      const [gameStatus, setGameStatus] = useState<string>(gameStatusSnapshotForCurrentGame);
+      const isIntroPhase = gameStatus === "intro";
       const isCaboRevealPhase = gameStatus === "cabo_reveal";
       const isAwaitingRematchDecision = gameStatus === "round_awaiting_rematch";
       const isPostRoundPhase = isCaboRevealPhase || isAwaitingRematchDecision;
@@ -929,8 +1092,10 @@ const Game = () => {
       const [isSubmittingRematchDecision, setIsSubmittingRematchDecision] = useState<boolean>(false);
       const [caboRevealCountdown, setCaboRevealCountdown] = useState<number>(0);
       const [rematchCountdown, setRematchCountdown] = useState<number>(0);
+      const [introElapsedMs, setIntroElapsedMs] = useState<number>(0);
       const [myRematchDecision, setMyRematchDecision] =
           useState<"CONTINUE" | "FRESH" | "NONE" | null>(null);
+      const introPhaseStartedAtMsRef = useRef<number | null>(null);
       const turnDeadlineMsRef = useRef<number | null>(null);
       const caboRevealDeadlineMsRef = useRef<number | null>(null);
       const rematchDeadlineMsRef = useRef<number | null>(null);
@@ -940,6 +1105,28 @@ const Game = () => {
       const selfUserId = userId.trim() !== "" && Number.isFinite(parsedSelfUserId)
           ? parsedSelfUserId
           : null;
+
+      useEffect(() => {
+          if (gameStatus !== "" || gameStatusSnapshotForCurrentGame === "") {
+              return;
+          }
+          setGameStatus(gameStatusSnapshotForCurrentGame);
+      }, [gameStatus, gameStatusSnapshotForCurrentGame]);
+
+      useEffect(() => {
+          if (!gameId || !gameStatus) {
+              return;
+          }
+          const snapshotGameId = String(activeGameStatusSnapshot?.gameId ?? "").trim();
+          const snapshotStatus = normalizeGameStatus(activeGameStatusSnapshot?.status);
+          if (snapshotGameId === gameId && snapshotStatus === gameStatus) {
+              return;
+          }
+          setActiveGameStatusSnapshot({
+              gameId,
+              status: gameStatus,
+          });
+      }, [activeGameStatusSnapshot, gameId, gameStatus, setActiveGameStatusSnapshot]);
 
       const tablePlayerIds = useMemo(() => {
           const unique = Array.from(new Set(orderedPlayerIds));
@@ -1245,15 +1432,6 @@ const Game = () => {
       };
 
       useEffect(() => {
-          if (!gameId || pendingInitialPeekGameId !== gameId) {
-              return;
-          }
-
-          setGameStatus("initial_peek");
-          clearPendingInitialPeekGameId();
-      }, [gameId, pendingInitialPeekGameId, clearPendingInitialPeekGameId]);
-
-      useEffect(() => {
           const authToken = token.trim();
           if (!authToken || !gameId) {
               setSocketSynced(false);
@@ -1364,16 +1542,6 @@ const Game = () => {
                               setOrderedPlayerIds((previous) =>
                                   arraysEqual(previous, nextPlayerIds) ? previous : nextPlayerIds
                               );
-                          }
-
-                          const finalScoreSnapshot = buildFinalRoundScoresSnapshot(
-                              payload,
-                              tablePlayerIdsRef.current,
-                              playerNamesByIdRef.current,
-                          );
-                          if (finalScoreSnapshot) {
-                              setFinalScores(finalScoreSnapshot.players);
-                              setFinalScoreTotalRounds(finalScoreSnapshot.totalRounds);
                           }
 
                           const previousPlayerCardsById = playerCardsByIdRef.current;
@@ -1633,7 +1801,19 @@ const Game = () => {
       }, [gameStatus]);
 
       useEffect(() => {
-          const missingIds = tablePlayerIds.filter((id) => !playerNamesById[id]);
+          const authToken = token.trim();
+          if (!authToken) {
+              return;
+          }
+
+          const candidateIds = [...tablePlayerIds];
+          finalScores.forEach((entry) => {
+              if (!candidateIds.includes(entry.userId)) {
+                  candidateIds.push(entry.userId);
+              }
+          });
+
+          const missingIds = candidateIds.filter((id) => isPlaceholderPlayerName(playerNamesById[id]));
           if (missingIds.length === 0) {
               return;
           }
@@ -1642,13 +1822,16 @@ const Game = () => {
           void Promise.all(
               missingIds.map(async (id) => {
                   try {
-                      const fetchedUser = await apiService.get<User>(`/users/${encodeURIComponent(String(id))}`);
+                      const fetchedUser = await apiService.getWithAuth<User>(
+                          `/users/${encodeURIComponent(String(id))}`,
+                          authToken,
+                      );
                       const displayName = String(
                           fetchedUser?.username ?? fetchedUser?.name ?? ""
                       ).trim();
-                      return [id, displayName || `Player ${id}`] as const;
+                      return [id, displayName] as const;
                   } catch {
-                      return [id, `Player ${id}`] as const;
+                      return [id, ""] as const;
                   }
               })
           ).then((entries) => {
@@ -1658,7 +1841,9 @@ const Game = () => {
               setPlayerNamesById((previous) => {
                   const next = { ...previous };
                   for (const [id, label] of entries) {
-                      next[id] = label;
+                      if (!isPlaceholderPlayerName(label)) {
+                          next[id] = label;
+                      }
                   }
                   return next;
               });
@@ -1667,7 +1852,115 @@ const Game = () => {
           return () => {
               active = false;
           };
-      }, [apiService, tablePlayerIds, playerNamesById]);
+      }, [apiService, finalScores, playerNamesById, tablePlayerIds, token]);
+
+      const refreshSessionScoresFromSessionState = useCallback(async () => {
+          const authToken = token.trim();
+          const sessionCode = lobbySessionId;
+          if (!authToken || !sessionCode) {
+              return;
+          }
+
+          let scorePayload: unknown;
+          try {
+              scorePayload = await apiService.getWithAuth<unknown>(
+                  `/sessions/${encodeURIComponent(sessionCode)}/history`,
+                  authToken,
+              );
+          } catch (error) {
+              const status = (error as ApplicationError)?.status;
+              if (status === 403 || status === 404 || status === 405) {
+                  return;
+              }
+              throw error;
+          }
+
+          const fallbackPlayerIds = tablePlayerIds.length > 0
+              ? tablePlayerIds
+              : (selfUserId != null ? [selfUserId] : []);
+          const sessionSnapshot = buildSessionHistoryScoresSnapshot(
+              scorePayload,
+              sessionCode,
+              fallbackPlayerIds,
+              playerNamesById,
+          ) ?? (() => {
+              const fallbackSnapshot = buildFinalRoundScoresSnapshot(
+                  scorePayload,
+                  fallbackPlayerIds,
+                  playerNamesById,
+              );
+              if (!fallbackSnapshot) {
+                  return null;
+              }
+              return {
+                  snapshot: fallbackSnapshot,
+                  sessionCode,
+              };
+          })();
+          if (!sessionSnapshot) {
+              return;
+          }
+
+          const { snapshot, sessionCode: resolvedSessionCode } = sessionSnapshot;
+          setFinalScores(snapshot.players);
+          setFinalScoreTotalRounds(snapshot.totalRounds);
+
+          if (
+              resolvedSessionCode &&
+              normalizeValue(resolvedSessionCode) !== normalizeValue(lobbySessionId)
+          ) {
+              setActiveLobbySessionId(resolvedSessionCode);
+          }
+      }, [
+          apiService,
+          lobbySessionId,
+          playerNamesById,
+          selfUserId,
+          setActiveLobbySessionId,
+          tablePlayerIds,
+          token,
+      ]);
+
+      useEffect(() => {
+          if (!gameId || !lobbySessionId) {
+              return;
+          }
+          void refreshSessionScoresFromSessionState().catch((error) => {
+              console.error("Could not load session scores:", error);
+          });
+      }, [gameId, lobbySessionId, refreshSessionScoresFromSessionState]);
+
+      useEffect(() => {
+          if (!gameId || !lobbySessionId) {
+              return;
+          }
+
+          const intervalId = window.setInterval(() => {
+              void refreshSessionScoresFromSessionState().catch(() => {
+                  // keep existing scores on transient failures
+              });
+          }, SESSION_SCORE_REFRESH_MS);
+
+          return () => {
+              window.clearInterval(intervalId);
+          };
+      }, [SESSION_SCORE_REFRESH_MS, gameId, lobbySessionId, refreshSessionScoresFromSessionState]);
+
+      useEffect(() => {
+          if (
+              gameStatus !== "cabo_reveal" &&
+              gameStatus !== "round_awaiting_rematch" &&
+              gameStatus !== "round_ended"
+          ) {
+              return;
+          }
+          if (!gameId || !lobbySessionId) {
+              return;
+          }
+          void refreshSessionScoresFromSessionState().catch((error) => {
+              console.error("Could not refresh session scores at round boundary:", error);
+          });
+      }, [gameId, gameStatus, lobbySessionId, refreshSessionScoresFromSessionState]);
 
       useEffect(() => {
           if (!gameId || !token) {
@@ -1746,6 +2039,30 @@ const Game = () => {
               window.clearInterval(intervalId);
           };
       }, [isCaboRevealPhase, caboRevealDurationSeconds]);
+      useEffect(() => {
+          if (!isIntroPhase) {
+              introPhaseStartedAtMsRef.current = null;
+              setIntroElapsedMs(0);
+              return;
+          }
+
+          introPhaseStartedAtMsRef.current = Date.now();
+          const tick = () => {
+              const startedAt = introPhaseStartedAtMsRef.current;
+              if (startedAt == null) {
+                  setIntroElapsedMs(0);
+                  return;
+              }
+              const elapsedMs = Math.max(0, Date.now() - startedAt);
+              setIntroElapsedMs(elapsedMs);
+          };
+
+          tick();
+          const intervalId = window.setInterval(tick, 100);
+          return () => {
+              window.clearInterval(intervalId);
+          };
+      }, [isIntroPhase]);
       // #34: Build final score payload once reveal window has ended and rematch voting opens
       useEffect(() => {
           if (!isAwaitingRematchDecision) return;
@@ -1848,6 +2165,7 @@ const Game = () => {
                       }
                       const waitingSessionId = String(response?.sessionId ?? "").trim();
                       if (waitingSessionId) {
+                          setActiveLobbySessionId(waitingSessionId);
                           setActiveSessionId(waitingSessionId);
                           router.replace(`/lobby/${encodeURIComponent(waitingSessionId)}`);
                           return;
@@ -1866,6 +2184,7 @@ const Game = () => {
                       }
                       const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
                       if (myWaitingSessionId) {
+                          setActiveLobbySessionId(myWaitingSessionId);
                           setActiveSessionId(myWaitingSessionId);
                           router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}`);
                           return;
@@ -1888,7 +2207,7 @@ const Game = () => {
           return () => {
               active = false;
           };
-      }, [apiService, gameStatus, gameId, token, router, setActiveSessionId]);
+      }, [apiService, gameStatus, gameId, token, router, setActiveLobbySessionId, setActiveSessionId]);
 
       const isPeekOrSpyPhaseForCountdown =
           gameStatus === "ability_peek_self" ||
@@ -3001,6 +3320,68 @@ const scoreModalPlayers = useMemo(() => {
     });
 }, [finalScores, tablePlayerIds, playerNamesById]);
 
+const introPhasePlayers = useMemo(() => {
+    const scoreByUserId = new Map<number, number | null>();
+    const snapshotNameByUserId = new Map<number, string>();
+    finalScores.forEach((entry) => {
+        const parsedScore = Number(entry.totalScore);
+        scoreByUserId.set(entry.userId, Number.isFinite(parsedScore) ? Math.trunc(parsedScore) : null);
+        const snapshotName = String(entry.username ?? "").trim();
+        if (!isPlaceholderPlayerName(snapshotName)) {
+            snapshotNameByUserId.set(entry.userId, snapshotName);
+        }
+    });
+
+      const combinedIds = [...tablePlayerIds];
+      finalScores.forEach((entry) => {
+          if (!combinedIds.includes(entry.userId)) {
+              combinedIds.push(entry.userId);
+          }
+      });
+
+      return combinedIds.map((id) => {
+          const mappedName = String(playerNamesById[id] ?? "").trim();
+          const username = !isPlaceholderPlayerName(mappedName)
+              ? mappedName
+              : (snapshotNameByUserId.get(id) ?? `Player ${id}`);
+          const resolvedScore = scoreByUserId.get(id);
+          return {
+              userId: id,
+              username,
+              scoreText: resolvedScore == null ? "-" : String(resolvedScore),
+          };
+      });
+  }, [finalScores, tablePlayerIds, playerNamesById]);
+
+const INTRO_TITLE_DURATION_MS = 2000;
+const INTRO_PLAYER_REVEAL_INTERVAL_MS = 2000;
+const INTRO_WAVE_FRAME_COUNT = 5;
+const INTRO_WAVE_FRAME_DURATION_MS = 200;
+
+const visibleIntroPlayersCount = useMemo(() => {
+    if (introElapsedMs < INTRO_TITLE_DURATION_MS) {
+        return 0;
+    }
+    const unlockedCount = 1 + Math.floor((introElapsedMs - INTRO_TITLE_DURATION_MS) / INTRO_PLAYER_REVEAL_INTERVAL_MS);
+    return Math.max(0, Math.min(introPhasePlayers.length, unlockedCount));
+}, [introElapsedMs, introPhasePlayers.length]);
+
+const visibleIntroPlayers = useMemo(
+    () => introPhasePlayers.slice(0, visibleIntroPlayersCount),
+    [introPhasePlayers, visibleIntroPlayersCount],
+);
+
+const introRoundNumber = useMemo(() => {
+    const roundsFromScores = finalScores.reduce((maxRounds, player) => {
+        const playerRoundCount = Array.isArray(player.roundScores) ? player.roundScores.length : 0;
+        return Math.max(maxRounds, playerRoundCount);
+    }, 0);
+    const parsedTotalRounds = Number(finalScoreTotalRounds);
+    const roundsFromState = Number.isFinite(parsedTotalRounds) ? Math.max(0, Math.trunc(parsedTotalRounds)) : 0;
+    const completedRounds = Math.max(roundsFromScores, roundsFromState);
+    return completedRounds + 1;
+}, [finalScoreTotalRounds, finalScores]);
+
 // #36/#42: show scoreboard modal
 const handleShowScores = () => {
     setIsScoresOpen(true);
@@ -3112,6 +3493,46 @@ const centerTurnActionLabel = useMemo(() => {
     isUseAbilitySelected,
 ]);
 
+if (isIntroPhase) {
+    return (
+        <div className="cabo-background">
+            <div className="game-intro-screen" role="status" aria-live="polite">
+                <h1 className="game-intro-title">
+                    <span className="game-intro-title-main">WELCOME TO CABO</span>
+                    <span className="game-intro-title-sub">ROUND {introRoundNumber}</span>
+                </h1>
+                <div className="game-intro-player-grid" aria-label="Intro players">
+                    {visibleIntroPlayers.map((player, index) => {
+                        const revealStartedAtMs = INTRO_TITLE_DURATION_MS + (index * INTRO_PLAYER_REVEAL_INTERVAL_MS);
+                        const elapsedSinceRevealMs = Math.max(0, introElapsedMs - revealStartedAtMs);
+                        const waveFrame = Math.min(
+                            INTRO_WAVE_FRAME_COUNT,
+                            1 + Math.floor(elapsedSinceRevealMs / INTRO_WAVE_FRAME_DURATION_MS),
+                        );
+                        return (
+                            <div key={player.userId} className="game-intro-player-card">
+                                <div className="game-intro-player-avatar" aria-hidden="true">
+                                    <Image
+                                        src={`/char01_waving_${waveFrame}.png`}
+                                        alt=""
+                                        width={160}
+                                        height={160}
+                                        className="game-intro-player-avatar-image"
+                                    />
+                                </div>
+                                <p className="game-intro-player-name" title={player.username}>
+                                    {player.username}
+                                </p>
+                                <p className="game-intro-player-score">{player.scoreText}</p>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const playerListRows = tablePlayerIds.map((id) => {
           const fallbackLabel = selfUserId != null && id === selfUserId ? "You" : `Player ${id}`;
           const label = playerNamesById[id] ?? fallbackLabel;
@@ -3157,7 +3578,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                       </div>
                   )}
 
-                  {!socketSynced && gameStatus !== "initial_peek" && (
+                  {!socketSynced && gameStatus !== "initial_peek" && gameStatus !== "intro" && (
                       <div className="game-rematch-overlay" role="status" aria-live="polite">
                           <div className="game-rematch-card">
                               <h2 className="game-rematch-title">Resyncing</h2>

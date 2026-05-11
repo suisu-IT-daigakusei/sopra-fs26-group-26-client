@@ -4,13 +4,15 @@
 // beinhaltet overview des users und seiner daten, möglichkeit zum logout, aber auch inspektion der anderen user sowie auch password change button  (s3)
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { getStompBrokerUrl } from "@/utils/domain";
 import { User } from "@/types/user";
+import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { Client } from "@stomp/stompjs";
-import { Button, Card, Input } from "antd"; // #43 Sesssion ID lookup
+import { Button, Card } from "antd";
 
 // Simple 3 variant dynamic greetings on Dashboard
 type GreetingSlot = "morning" | "day" | "afternoon" | "evening" | "night";
@@ -63,9 +65,7 @@ function DashboardContent() {
 
   const [user, setUser] = useState<User | null>(null);
   const [liveConnected, setLiveConnected] = useState(false);
-// Add an input field on the dashboard to allow users to look up a past sessionId and view its log.
-// #43
-  const [historySessionId, setHistorySessionId] = useState<string>("");
+  const [userHistoryPayload, setUserHistoryPayload] = useState<unknown>(null);
 
   const { value: userId, clear: clearUserId } = useLocalStorage<string>("userId", "");
   const { value: token, clear: clearToken } = useLocalStorage<string>("token", "");
@@ -168,6 +168,37 @@ function DashboardContent() {
     };
   }, [normalizedToken]);
 
+  useEffect(() => {
+    if (!normalizedUserId || !normalizedToken) {
+      setUserHistoryPayload(null);
+      return;
+    }
+
+    let active = true;
+
+    const fetchHistory = async () => {
+      try {
+        const payload = await apiService.getWithAuth<unknown>(
+          `/users/${encodeURIComponent(normalizedUserId)}/history`,
+          normalizedToken,
+        );
+        if (active) {
+          setUserHistoryPayload(payload);
+        }
+      } catch {
+        if (active) {
+          setUserHistoryPayload(null);
+        }
+      }
+    };
+
+    void fetchHistory();
+
+    return () => {
+      active = false;
+    };
+  }, [apiService, normalizedToken, normalizedUserId]);
+
   const greeting = useMemo(() => {
     const localHour = new Date().getHours();
     const slot = getGreetingSlotByHour(localHour);
@@ -191,18 +222,24 @@ function DashboardContent() {
     window.location.assign("/login");
   };
 
-  const wins = Number(user?.gamesWon ?? 0);
-  const gamesPlayedRaw = (
-    user as User & { gamesPlayed?: number | null; games?: number | null }
-  )?.gamesPlayed ?? (
-    user as User & { gamesPlayed?: number | null; games?: number | null }
-  )?.games ?? 0;
-  const gamesPlayed = Number.isFinite(Number(gamesPlayedRaw))
-    ? Number(gamesPlayedRaw)
+  const derivedPlayedStats = useMemo(
+    () => derivePlayedStatsFromHistoryPayload(userHistoryPayload, normalizedUserId),
+    [normalizedUserId, userHistoryPayload],
+  );
+  const roundsWon = Number(user?.roundsWon ?? 0);
+  const roundsPlayedRaw = (
+    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+  )?.roundsPlayed ?? (
+    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+  )?.rounds ?? (
+    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+  )?.roundCount ?? derivedPlayedStats.roundsPlayed ?? 0;
+  const roundsPlayed = Number.isFinite(Number(roundsPlayedRaw))
+    ? Number(roundsPlayedRaw)
     : 0;
-  const winRatePct = gamesPlayed > 0 ? (wins / gamesPlayed) * 100 : 0;
+  const winRatePct = roundsPlayed > 0 ? (roundsWon / roundsPlayed) * 100 : 0;
   const winRateText = Number(winRatePct).toFixed(1).replace(/\.0$/, "");
-  const winsGamesSummary = `${wins}/${gamesPlayed} (${winRateText}%)`;
+  const winsRoundsSummary = `${roundsWon}/${roundsPlayed} (${winRateText}%)`;
   const averageScore = user?.averageScorePerRound ?? "-";
 
   return (
@@ -225,42 +262,30 @@ function DashboardContent() {
               </div>
             }
           >
-            <div className="dashboard-welcome-player">{user?.username?.trim() || "Player"}</div>
-            <div className="dashboard-metric-row">
-              <span>Wins/Games</span>
-              <span>{winsGamesSummary}</span>
-            </div>
-            <div className="dashboard-metric-row">
-              <span>Average Score per Round</span>
-              <span>{averageScore}</span>
+            <div className="dashboard-profile-hero">
+              <div className="dashboard-profile-avatar-wrap" aria-hidden="true">
+                <Image
+                  src="/char01_profile.png"
+                  alt=""
+                  width={112}
+                  height={112}
+                  className="dashboard-profile-avatar"
+                />
+              </div>
+              <div className="dashboard-profile-metrics">
+                <div className="dashboard-welcome-player">{user?.username?.trim() || "Player"}</div>
+                <div className="dashboard-metric-row">
+                  <span>Wins / Rounds</span>
+                  <span>{winsRoundsSummary}</span>
+                </div>
+                <div className="dashboard-metric-row">
+                  <span>Average Score per Round</span>
+                  <span>{averageScore}</span>
+                </div>
+              </div>
             </div>
           </Card>
 
-          {/* #43: Add an input field on the dashboard to allow users to look up a past sessionId and view its log. */}
-          <Card
-              className="dashboard-container"
-              title={<div className="dashboard-section-title">Move History</div>}
-          >
-              <div className="dashboard-button-stack">
-                  <Input
-                      placeholder="Enter Session ID to look up moves"
-                      value={historySessionId}
-                      onChange={(e) => setHistorySessionId(e.target.value)}
-                      style={{ marginBottom: "10px" }}
-                  />
-                  <Button
-                      type="primary"
-                      disabled={!historySessionId.trim()}
-                      onClick={() => {
-                          if (historySessionId.trim()) {
-                              router.push(`/history/${encodeURIComponent(historySessionId.trim())}`);
-                          }
-                      }}
-                  >
-                      View Move History
-                  </Button>
-              </div>
-          </Card>
           <Card
             className="dashboard-container"
             title={<div className="dashboard-section-title">Play</div>}
@@ -268,9 +293,6 @@ function DashboardContent() {
             <div className="dashboard-button-stack">
               <Button type="primary" onClick={() => router.push("/lobby/join")}>
                 Join a Game
-              </Button>
-              <Button type="default" disabled>
-                Random Matchmaking
               </Button>
               <Button type="primary" onClick={() => router.push("/create_lobby")}>
                 Create a New Lobby
