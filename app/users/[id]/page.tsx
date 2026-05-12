@@ -925,64 +925,70 @@ const UserProfilePage: React.FC = () => {
               </div>
             }
           >
-            <div className="profile-results-filters">
-              <Input
-                allowClear
-                className="users-overview-search"
-                placeholder="Search Lobby Code"
-                value={resultsLobbyCodeQuery}
-                onChange={(event) => setResultsLobbyCodeQuery(event.target.value)}
-              />
-              <Input
-                allowClear
-                className="users-overview-search"
-                placeholder="Search Date Played (DDMMYYYY)"
-                value={resultsDateQuery}
-                onChange={(event) => setResultsDateQuery(event.target.value)}
-              />
-            </div>
-            <Table<ProfileResultRow>
-              className="users-overview-table profile-results-table responsive-list-table"
-              columns={resultsColumns}
-              dataSource={displayResultsRows}
-              rowKey="key"
-              size="small"
-              tableLayout="fixed"
-              loading={loadingResults}
-              pagination={{
-                pageSize: RESULTS_PAGE_SIZE,
-                showSizeChanger: false,
-                hideOnSinglePage: false,
-                responsive: true,
-                position: ["bottomCenter"],
-              }}
-              rowClassName={() => "profile-results-row"}
-              onRow={(row) => {
-                const historyCode = String(row.historySessionCode ?? "").trim();
-                if (row.isEmptyState || historyCode.length === 0) {
-                  return {};
-                }
-                return {
-                  onClick: () => {
-                    router.push(`/history/${encodeURIComponent(historyCode)}`);
-                  },
-                  onKeyDown: (event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      router.push(`/history/${encodeURIComponent(historyCode)}`);
+            {!loadingResults && gamesPlayed === 0 ? (
+              <p className="profile-results-empty-text">No games played yet.</p>
+            ) : (
+              <>
+                <div className="profile-results-filters">
+                  <Input
+                    allowClear
+                    className="users-overview-search"
+                    placeholder="Search Lobby Code"
+                    value={resultsLobbyCodeQuery}
+                    onChange={(event) => setResultsLobbyCodeQuery(event.target.value)}
+                  />
+                  <Input
+                    allowClear
+                    className="users-overview-search"
+                    placeholder="Search Date Played (DDMMYYYY)"
+                    value={resultsDateQuery}
+                    onChange={(event) => setResultsDateQuery(event.target.value)}
+                  />
+                </div>
+                <Table<ProfileResultRow>
+                  className="users-overview-table profile-results-table responsive-list-table"
+                  columns={resultsColumns}
+                  dataSource={displayResultsRows}
+                  rowKey="key"
+                  size="small"
+                  tableLayout="fixed"
+                  loading={loadingResults}
+                  pagination={{
+                    pageSize: RESULTS_PAGE_SIZE,
+                    showSizeChanger: false,
+                    hideOnSinglePage: false,
+                    responsive: true,
+                    position: ["bottomCenter"],
+                  }}
+                  rowClassName={() => "profile-results-row"}
+                  onRow={(row) => {
+                    const historyCode = String(row.historySessionCode ?? "").trim();
+                    if (row.isEmptyState || historyCode.length === 0) {
+                      return {};
                     }
-                  },
-                  tabIndex: 0,
-                  role: "link",
-                  style: { cursor: "pointer" },
-                };
-              }}
-              locale={{
-                emptyText: hasActiveResultsFilters
-                  ? "No results match the current search."
-                  : NO_RESULTS_TEXT,
-              }}
-            />
+                    return {
+                      onClick: () => {
+                        router.push(`/history/${encodeURIComponent(historyCode)}`);
+                      },
+                      onKeyDown: (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          router.push(`/history/${encodeURIComponent(historyCode)}`);
+                        }
+                      },
+                      tabIndex: 0,
+                      role: "link",
+                      style: { cursor: "pointer" },
+                    };
+                  }}
+                  locale={{
+                    emptyText: hasActiveResultsFilters
+                      ? "No results match the current search."
+                      : NO_RESULTS_TEXT,
+                  }}
+                />
+              </>
+            )}
           </Card>
 
           <Card className="dashboard-container">
