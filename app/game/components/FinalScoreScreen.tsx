@@ -116,6 +116,43 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     onChooseRematch,
 }) => {
     if (!isOpen) return null;
+    // Create a modal/toast notification with a 5s countdown timer and "Confirm/Cancel" buttons.
+    //   #58
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const [pendingDecision, setPendingDecision] = React.useState<RematchDecision | null>(null);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const [confirmCountdown, setConfirmCountdown] = React.useState<number>(5);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const confirmTimerRef = React.useRef<number | null>(null);
+
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    React.useEffect(() => {
+        return () => {
+            if (confirmTimerRef.current != null) {
+                window.clearInterval(confirmTimerRef.current);
+            }
+        };
+    }, []);
+
+    const startConfirm = (decision: RematchDecision) => {
+        setPendingDecision(decision);
+        setConfirmCountdown(5);
+        if (confirmTimerRef.current != null) {
+            window.clearInterval(confirmTimerRef.current);
+        }
+        confirmTimerRef.current = window.setInterval(() => {
+            setConfirmCountdown((previous) => {
+                if (previous <= 1) {
+                    window.clearInterval(confirmTimerRef.current!);
+                    confirmTimerRef.current = null;
+                    onChooseRematch(decision);
+                    setPendingDecision(null);
+                    return 5;
+                }
+                return previous - 1;
+            });
+        }, 1000);
+    };
 
     const normalizedPlayers: FinalPlayerResolved[] = players.map((player) => ({
         ...player,
@@ -334,10 +371,9 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         </tbody>
                     </table>
                 </div>
-
                 <div className="final-score-rematch">
                     <h2 className="final-score-rematch-title">
-                        Decide if you want a rematch{" "}
+                        Rematch?{" "}
                         <span className={`final-score-rematch-timer${isUrgentCountdown ? " final-score-rematch-timer-urgent" : ""}`}>
                             {rematchCountdownSeconds}s
                         </span>
@@ -345,32 +381,81 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                     <p className="final-score-rematch-help">
                         Continue keeps the same lobby code. Fresh creates a new lobby code.
                     </p>
+
+                    {/* 5s countdown modal after button click */}
+                    {pendingDecision !== null && (
+                        <div className="final-score-confirm-modal">
+                            <p className="final-score-confirm-text">
+                                Confirm:{" "}
+                                <strong>
+                                    {pendingDecision === "CONTINUE"
+                                        ? "Rematch (Continue)"
+                                        : pendingDecision === "FRESH"
+                                            ? "Rematch (Fresh)"
+                                            : "No Rematch"}
+                                </strong>
+                                {" "}in{" "}
+                                <span className="final-score-confirm-countdown">{confirmCountdown}s</span>
+                            </p>
+                            <div className="final-score-confirm-actions">
+                                <Button
+                                    type="primary"
+                                    loading={isSubmittingRematchDecision}
+                                    onClick={() => {
+                                        if (confirmTimerRef.current != null) {
+                                            window.clearInterval(confirmTimerRef.current);
+                                            confirmTimerRef.current = null;
+                                        }
+                                        onChooseRematch(pendingDecision);
+                                        setPendingDecision(null);
+                                    }}
+                                >
+                                    Confirm
+                                </Button>
+                                <Button
+                                    type="default"
+                                    danger
+                                    onClick={() => {
+                                        if (confirmTimerRef.current != null) {
+                                            window.clearInterval(confirmTimerRef.current);
+                                            confirmTimerRef.current = null;
+                                        }
+                                        setPendingDecision(null);
+                                        setConfirmCountdown(5);
+                                    }}
+                                >
+                                    Cancel
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
                     {myRematchDecision != null && (
                         <p className="final-score-rematch-choice">
-                            You chose: {
-                                myRematchDecision === "CONTINUE"
-                                    ? "Rematch (Continue Round Count)"
-                                    : myRematchDecision === "FRESH"
-                                        ? "Rematch (Fresh Game)"
-                                        : "No Rematch"
-                            }. Waiting for other players...
+                            You chose:{" "}
+                            {myRematchDecision === "CONTINUE"
+                                ? "Rematch (Continue Round Count)"
+                                : myRematchDecision === "FRESH"
+                                    ? "Rematch (Fresh Game)"
+                                    : "No Rematch"}
+                            . Waiting for other players...
                         </p>
                     )}
+
                     <div className="final-score-rematch-actions">
                         <Button
                             type={myRematchDecision === "CONTINUE" ? "primary" : "default"}
                             className={`final-score-rematch-btn${!isDecisionLocked ? " final-score-rematch-btn-glow" : ""}${isUrgentCountdown ? " final-score-rematch-btn-urgent" : ""}`}
-                            disabled={myRematchDecision !== null || isSubmittingRematchDecision}
-                            loading={isSubmittingRematchDecision && myRematchDecision === null}
-                            onClick={() => onChooseRematch("CONTINUE")}
+                            disabled={isDecisionLocked || pendingDecision !== null}
+                            onClick={() => startConfirm("CONTINUE")}
                         >
                             Rematch (Continue)
                         </Button>
                         <Button
                             type={myRematchDecision === "FRESH" ? "primary" : "default"}
                             className={`final-score-rematch-btn${!isDecisionLocked ? " final-score-rematch-btn-glow" : ""}${isUrgentCountdown ? " final-score-rematch-btn-urgent" : ""}`}
-                            disabled={myRematchDecision !== null || isSubmittingRematchDecision}
-                            onClick={() => onChooseRematch("FRESH")}
+                            disabled={isDecisionLocked || pendingDecision !== null}
+                            onClick={() => startConfirm("FRESH")}
                         >
                             Rematch (Fresh)
                         </Button>
@@ -378,8 +463,8 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                             type={myRematchDecision === "NONE" ? "primary" : "default"}
                             danger
                             className={`final-score-rematch-btn${!isDecisionLocked ? " final-score-rematch-btn-glow" : ""}${isUrgentCountdown ? " final-score-rematch-btn-urgent" : ""}`}
-                            disabled={myRematchDecision !== null || isSubmittingRematchDecision}
-                            onClick={() => onChooseRematch("NONE")}
+                            disabled={isDecisionLocked || pendingDecision !== null}
+                            onClick={() => startConfirm("NONE")}
                         >
                             No Rematch
                         </Button>

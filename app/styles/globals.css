@@ -1232,6 +1232,34 @@ h1 {
   white-space: nowrap;
 }
 
+/* #:58 Create a modal/toast notification with a 5s countdown timer and "Confirm/Cancel" buttons. */
+.final-score-confirm-modal {
+    background: rgba(30, 30, 40, 0.97);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    padding: 16px 24px;
+    margin-bottom: 16px;
+    text-align: center;
+}
+
+.final-score-confirm-text {
+    font-size: 16px;
+    color: #fff;
+    margin-bottom: 12px;
+}
+
+.final-score-confirm-countdown {
+    font-weight: bold;
+    color: #ffb14a;
+    font-size: 20px;
+}
+
+.final-score-confirm-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
 /* #32: A banner or visual cue that stays on screen for everyone once Cabo is called (e.g., "Final Round!") */
 @keyframes pulse {
     0% { opacity: 1; transform: translateX(-50%) scale(1); }
