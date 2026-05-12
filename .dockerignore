@@ -1,17 +1,31 @@
 node_modules
 jspm_packages
-npm-debug.log
 .npm
-yarn-debug.log
 .yarn
 .yarn/cache
 .yarn/unplugged
 .yarn/build-state.yml
 .yarn/install-state.gz
-.dockerignore
-Dockerfile
+
+# Next.js build/cache output
+.next
+out
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs
+
+# VCS / IDE
 .git
 .gitignore
-logs
+.idea
+.vscode
 .vscode-test
+
+# Local / temp
+tmp_vercel_logs
 .xcode.env.local

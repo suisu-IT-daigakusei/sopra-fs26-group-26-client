@@ -13,7 +13,6 @@ import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
 const DEFAULT_BIO = "This player hasn't added a bio yet."; //placeholder default text
-const BIO_MAX_LENGTH = 180; // can be changed
 const RESULTS_PAGE_SIZE = 6; // can be changed
 const NO_RESULTS_TEXT = "This user has not played a game yet."; // to show a line
 const WINNER_CROWN = "\uD83D\uDC51";
@@ -474,9 +473,6 @@ const UserProfilePage: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
-  const [editingBio, setEditingBio] = useState(false);
-  const [savingBio, setSavingBio] = useState(false);
-  const [bioDraft, setBioDraft] = useState("");
   const [resultsRaw, setResultsRaw] = useState<unknown>([]);
   const [loadingResults, setLoadingResults] = useState(false);
   const [resultsLobbyCodeQuery, setResultsLobbyCodeQuery] = useState("");
@@ -504,7 +500,6 @@ const UserProfilePage: React.FC = () => {
           return;
         }
         setUser(fetched);
-        setBioDraft((fetched.bio ?? "").trim() || DEFAULT_BIO);
       } catch (error) {
         if (active && error instanceof Error) {
           setUser(null);
@@ -750,55 +745,6 @@ const UserProfilePage: React.FC = () => {
   const hasActiveResultsFilters =
     resultsLobbyCodeQuery.trim().length > 0 || resultsDateQuery.trim().length > 0;
 
-  const handleSaveBio = async () => {
-    if (!isOwnProfile || !user || savingBio) {
-      return;
-    }
-
-    const normalizedDraft = bioDraft.trim();
-    const nextBio = normalizedDraft.length > 0 && normalizedDraft !== DEFAULT_BIO
-      ? normalizedDraft
-      : "";
-    const authToken = String(token ?? "").trim();
-    let persisted = false;
-    let persistErrorMessage = "";
-
-    setSavingBio(true);
-    try {
-      if (authToken.length > 0) {
-        await apiService.putWithAuth<void>(
-          `/users/${encodeURIComponent(viewedUserId)}`,
-          { bio: nextBio },
-          authToken,
-        );
-      } else {
-        await apiService.put<void>(
-          `/users/${encodeURIComponent(viewedUserId)}`,
-          { bio: nextBio },
-        );
-      }
-      persisted = true;
-    } catch (error) {
-      persistErrorMessage = error instanceof Error ? error.message : "Unknown error";
-    } finally {
-      setSavingBio(false);
-      setUser((previous) => (
-        previous
-          ? {
-              ...previous,
-              bio: nextBio,
-            }
-          : previous
-      ));
-      setEditingBio(false);
-      setBioDraft(nextBio || DEFAULT_BIO);
-    }
-
-    if (!persisted) {
-      alert(`Bio update could not be persisted to backend.\n${persistErrorMessage || "Please try again."}`);
-    }
-  };
-
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
@@ -895,66 +841,26 @@ const UserProfilePage: React.FC = () => {
                       <span className="profile-key">Username</span>
                       <span className="profile-value">{user.username ?? "-"}</span>
                     </div>
-                    <div className="profile-bio-head">
-                      <span className="profile-key">Bio</span>
-                      <span className="profile-bio-head-actions">
-                        {isOwnProfile ? (
-                          editingBio ? (
-                            <>
-                              <Button
-                                type="primary"
-                                className="profile-bio-inline-btn"
-                                loading={savingBio}
-                                onClick={() => {
-                                  void handleSaveBio();
-                                }}
-                              >
-                                Save Bio
-                              </Button>
-                              <Button
-                                type="default"
-                                className="profile-bio-inline-btn"
-                                disabled={savingBio}
-                                onClick={() => {
-                                  setEditingBio(false);
-                                  setBioDraft(shownBio);
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              type="default"
-                              className="profile-bio-edit-btn profile-bio-inline-btn"
-                              onClick={() => {
-                                setBioDraft(shownBio);
-                                setEditingBio(true);
-                              }}
-                            >
-                              Edit
-                            </Button>
-                          )
-                        ) : null}
-                      </span>
-                    </div>
-                    <div className="profile-hero-bio-content">
-                      {isOwnProfile && editingBio ? ( //can only see edit and edit if own profile
-                        <div className="profile-bio-editor">
-                          <Input.TextArea
-                            rows={4}
-                            value={bioDraft}
-                            onChange={(event) => setBioDraft(event.target.value)}
-                            maxLength={BIO_MAX_LENGTH}
-                            showCount
-                            placeholder="Write a short bio"
-                          />
-                        </div>
-                      ) : (
+                    <div className="profile-bio-block">
+                      <div className="profile-bio-head">
+                        <span className="profile-key">Bio</span>
+                      </div>
+                      <div className="profile-hero-bio-content">
                         <p className={`profile-bio-text${isDefaultBio ? " profile-bio-text-placeholder" : ""}`}>
                           {shownBio}
                         </p>
-                      )}
+                      </div>
+                      {isOwnProfile ? (
+                        <div className="profile-bio-footer">
+                          <Button
+                            type="default"
+                            className="profile-bio-edit-btn"
+                            onClick={() => router.push("/settings")}
+                          >
+                            Edit Profile
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>

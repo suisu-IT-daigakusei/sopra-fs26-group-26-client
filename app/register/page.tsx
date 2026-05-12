@@ -13,6 +13,7 @@ interface FormFieldProps {
     bio?: string;
 }
 const USERNAME_MAX_LENGTH = 16; // CAN CHANGE USERNAME LENGTH LIMIT >>> FIX IN BACKEND TOO
+const BIO_MAX_LENGTH = 180;
 
 const Register: React.FC = () => {
     const router = useRouter();
@@ -66,6 +67,15 @@ const Register: React.FC = () => {
     const handleRegister = async (values: FormFieldProps) => {
         try {
             const normalizedBio = values.bio?.trim();
+            if (normalizedBio && normalizedBio.length > BIO_MAX_LENGTH) {
+                form.setFields([
+                    {
+                        name: "bio",
+                        errors: [`Bio can be max ${BIO_MAX_LENGTH} characters.`],
+                    },
+                ]);
+                return;
+            }
             const payload = {
                 ...values,
                 bio: normalizedBio && normalizedBio.length > 0
@@ -136,8 +146,18 @@ return (
                     <Form.Item
                         name="bio"
                         label="Bio"
+                        rules={[
+                            {
+                                max: BIO_MAX_LENGTH,
+                                message: `Bio can be max ${BIO_MAX_LENGTH} characters.`,
+                            },
+                        ]}
                     >
-                        <Input placeholder="Optional (you can add this later)" />
+                        <Input
+                            placeholder="Optional (you can add this later)"
+                            maxLength={BIO_MAX_LENGTH}
+                            showCount
+                        />
                     </Form.Item>
                     <Form.Item>
                         <Button type="primary" htmlType="submit" className="login-button">
