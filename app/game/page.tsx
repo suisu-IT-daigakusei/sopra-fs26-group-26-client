@@ -1720,6 +1720,32 @@ const Game = () => {
                           /* ignore malformed payload */
                       }
                   });
+                  client.subscribe("/user/queue/redirect", (message) => {
+                      try {
+                          const payload = JSON.parse(String(message.body ?? "{}")) as Record<string, unknown>;
+
+                          // extrahiere neue Session/Lobby ID
+                          const newSessionId = String(
+                              payload.sessionId ??
+                              payload.lobbyId ??
+                              payload.code ??
+                              payload.id ??
+                              ""
+                          ).trim();
+
+                          if (!newSessionId) {
+                              return;
+                          }
+
+                          // update local storage und navigiere zur neuen Lobby
+                          setActiveLobbySessionId(newSessionId);
+                          setActiveSessionId(newSessionId);
+                          router.replace(`/lobby/${encodeURIComponent(newSessionId)}`);
+                      } catch {
+                          /* ignore malformed payload */
+                      }
+                  });
+
               },
               onStompError: () => {
                   setSocketSynced(false);
