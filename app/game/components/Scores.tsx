@@ -90,13 +90,20 @@ const Scores: React.FC<ScoresProps> = ({
     );
 
     // Current-scores view intentionally excludes the running/current round.
-    const completedRoundsForScores = Math.max(0, resolvedTotalRounds - 1);
+    // Some payloads only expose one completed round even while the next round is active;
+    // in that case keep one visible score column instead of collapsing to "-".
+    let completedRoundsForScores = Math.max(0, resolvedTotalRounds - 1);
+    const hasAnyPersistedScore = normalizedPlayers.some(
+        (player) =>
+            player.totalScore != null ||
+            player.roundScores.some((value) => value != null),
+    );
+    if (completedRoundsForScores === 0 && hasAnyPersistedScore) {
+        completedRoundsForScores = 1;
+    }
     const hasRanking = completedRoundsForScores > 0;
     const showEarlyRoundsSummaryColumn = completedRoundsForScores >= 2;
-    const scoreColumnCount = completedRoundsForScores > 0
-        ? (showEarlyRoundsSummaryColumn ? 2 : 1)
-        : 1;
-    const scoreGroupLabel = scoreColumnCount <= 1 ? "Score" : "Scores";
+    const showLatestCompletedRoundColumn = completedRoundsForScores >= 1;
 
     const totalsForDisplayByUserId: Record<number, number | null> = {};
     normalizedPlayers.forEach((player) => {
@@ -114,6 +121,11 @@ const Scores: React.FC<ScoresProps> = ({
                 (sum, value) => sum + Number(value),
                 0,
             );
+            return;
+        }
+
+        if (player.totalScore != null) {
+            totalsForDisplayByUserId[player.userId] = player.totalScore;
             return;
         }
 
@@ -152,7 +164,14 @@ const Scores: React.FC<ScoresProps> = ({
         if (!hasRanking || roundIndex < 0 || roundIndex >= completedRoundsForScores) {
             return "-";
         }
-        return toScoreText(player.roundScores[roundIndex] ?? null);
+        const roundValue = player.roundScores[roundIndex] ?? null;
+        if (roundValue != null) {
+            return toScoreText(roundValue);
+        }
+        if (completedRoundsForScores === 1 && player.totalScore != null) {
+            return toScoreText(player.totalScore);
+        }
+        return "-";
     };
 
     const getEarlyRoundsSummaryText = (player: PlayerScoreResolved): string => {
@@ -172,6 +191,18 @@ const Scores: React.FC<ScoresProps> = ({
         return toScoreText(
             numericEarlyRoundValues.reduce((sum, value) => sum + value, 0),
         );
+    };
+
+    const getEarlyRoundsLabel = (): string => {
+        const endRound = Math.max(1, completedRoundsForScores - 1);
+        if (endRound <= 1) {
+            return "Round 1";
+        }
+        return `Rounds 1-${endRound}`;
+    };
+
+    const getLatestCompletedRoundLabel = (): string => {
+        return `Round ${Math.max(1, completedRoundsForScores)}`;
     };
 
     const getMovementLabel = (player: PlayerScoreResolved): { text: string; className: string } => {
@@ -212,17 +243,21 @@ const Scores: React.FC<ScoresProps> = ({
                         <colgroup>
                             <col className="final-score-col-place" />
                             <col className="final-score-col-username" />
-                            {Array.from({ length: scoreColumnCount }).map((_, index) => (
-                                <col key={`score-col-${index}`} />
-                            ))}
+                            {showEarlyRoundsSummaryColumn ? <col /> : null}
+                            {showLatestCompletedRoundColumn ? <col /> : null}
                             <col className="final-score-col-total" />
                         </colgroup>
                         <thead>
                             <tr>
                                 <th className="final-score-col-place final-score-col-place-head"></th>
                                 <th className="final-score-col-username final-score-col-username-head">Username</th>
-                                <th colSpan={scoreColumnCount}>{scoreGroupLabel}</th>
-                                <th className="final-score-col-total final-score-col-total-head">Total Scores</th>
+                                {showEarlyRoundsSummaryColumn ? (
+                                    <th>{getEarlyRoundsLabel()}</th>
+                                ) : null}
+                                {showLatestCompletedRoundColumn ? (
+                                    <th>{getLatestCompletedRoundLabel()}</th>
+                                ) : null}
+                                <th className="final-score-col-total final-score-col-total-head">Total Score</th>
                             </tr>
                         </thead>
                         <tbody>

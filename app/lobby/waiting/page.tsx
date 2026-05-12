@@ -1,6 +1,7 @@
 "use client";
 
 import { useApi } from "@/hooks/useApi";
+import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { useOnlineUsersTopic } from "@/hooks/useOnlineUsersTopic";
@@ -356,6 +357,7 @@ function WaitingLobbyContent() {
   const { value: token } = useLocalStorage<string>("token", "");
   const { value: userId } = useLocalStorage<string>("userId", "");
   const normalizedUserId = String(userId).trim();
+  const lobbyApiConnected = useApiConnectionStatus(normalizedUserId, token.trim());
   const { set: setActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
   const { set: setActiveLobbySessionId } = useLocalStorage<string>("activeLobbySessionId", "");
   const { set: setPendingInitialPeekGameId } = useLocalStorage<string>("pendingInitialPeekGameId", "");
@@ -949,7 +951,7 @@ function WaitingLobbyContent() {
   const viewerIsReady = Boolean(viewerLobbySlot?.ready);
 
   const sessionId = String(view?.sessionId ?? sessionIdParam ?? "").trim();
-  const lobbyConnectionIsGreen = lobbyWsConnected;
+  const lobbyConnectionIsGreen = lobbyApiConnected;
 
   useEffect(() => {
     const sid = sessionId.trim();

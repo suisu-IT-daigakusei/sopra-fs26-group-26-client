@@ -5,12 +5,10 @@ import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
+import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
-import { getStompBrokerUrl } from "@/utils/domain";
-import { Client } from "@stomp/stompjs";
-import SockJS from "sockjs-client";
 
 type LobbyGetDTO = {
     sessionId?: string | null;
@@ -174,11 +172,11 @@ const LobbyJoin = () => {
     const [loadingOpenLobbies, setLoadingOpenLobbies] = useState(false);
     const [joiningSessionId, setJoiningSessionId] = useState<string>("");
     const [selectedOpenLobbySessionId, setSelectedOpenLobbySessionId] = useState<string>("");
-    const [liveConnected, setLiveConnected] = useState(false);
     const [hostUsernamesById, setHostUsernamesById] = useState<Record<string, string>>({});
 
     const authToken = token.trim();
     const normalizedUserId = String(userId).trim();
+    const liveConnected = useApiConnectionStatus(normalizedUserId, authToken);
 
     const loadOpenLobbies = useCallback(async () => {
         if (!authToken) {
@@ -216,37 +214,6 @@ const LobbyJoin = () => {
         }, OPEN_LOBBIES_POLL_MS);
         return () => clearInterval(pollId);
     }, [loadOpenLobbies]);
-
-    useEffect(() => {
-        if (!authToken) {
-            setLiveConnected(false);
-            return;
-        }
-
-        const client = new Client({
-            webSocketFactory: () => new SockJS(getStompBrokerUrl()),
-            connectHeaders: { Authorization: authToken },
-            reconnectDelay: 5000,
-            onConnect: () => {
-                setLiveConnected(true);
-            },
-            onStompError: () => {
-                setLiveConnected(false);
-            },
-            onWebSocketClose: () => {
-                setLiveConnected(false);
-            },
-            onWebSocketError: () => {
-                setLiveConnected(false);
-            },
-        });
-
-        client.activate();
-        return () => {
-            setLiveConnected(false);
-            void client.deactivate();
-        };
-    }, [authToken]);
 
     const handleBack = () => {
         if (typeof window !== "undefined" && window.history.length > 1) {

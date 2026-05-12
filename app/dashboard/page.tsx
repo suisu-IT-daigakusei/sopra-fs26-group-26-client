@@ -7,11 +7,10 @@ import React, { Suspense, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
+import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import useLocalStorage from "@/hooks/useLocalStorage";
-import { getStompBrokerUrl } from "@/utils/domain";
 import { User } from "@/types/user";
 import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
-import { Client } from "@stomp/stompjs";
 import { Button, Card } from "antd";
 
 // Simple 3 variant dynamic greetings on Dashboard
@@ -64,13 +63,13 @@ function DashboardContent() {
   const apiService = useApi();
 
   const [user, setUser] = useState<User | null>(null);
-  const [liveConnected, setLiveConnected] = useState(false);
   const [userHistoryPayload, setUserHistoryPayload] = useState<unknown>(null);
 
   const { value: userId, clear: clearUserId } = useLocalStorage<string>("userId", "");
   const { value: token, clear: clearToken } = useLocalStorage<string>("token", "");
   const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
   const normalizedToken = typeof token === "string" ? token.trim() : "";
+  const liveConnected = useApiConnectionStatus(normalizedUserId, normalizedToken);
 
   useEffect(() => {
     const kicked = searchParams.get("kicked");
@@ -120,53 +119,6 @@ function DashboardContent() {
       active = false;
     };
   }, [apiService, normalizedUserId, normalizedToken, router, clearToken, clearUserId]);
-
-  useEffect(() => {
-    const authToken = normalizedToken;
-    if (!authToken || typeof window === "undefined") {
-      setLiveConnected(false);
-      return;
-    }
-
-    let stopped = false;
-    let client: Client | null = null;
-
-    const connectLiveUpdates = async () => {
-      const { default: SockJS } = await import("sockjs-client");
-      if (stopped) {
-        return;
-      }
-
-      client = new Client({
-        webSocketFactory: () => new SockJS(getStompBrokerUrl()),
-        connectHeaders: { Authorization: authToken },
-        reconnectDelay: 5000,
-        onConnect: () => {
-          setLiveConnected(true);
-        },
-        onStompError: () => {
-          setLiveConnected(false);
-        },
-        onWebSocketClose: () => {
-          setLiveConnected(false);
-        },
-        onWebSocketError: () => {
-          setLiveConnected(false);
-        },
-      });
-
-      client.activate();
-    };
-
-    void connectLiveUpdates();
-    return () => {
-      stopped = true;
-      setLiveConnected(false);
-      if (client) {
-        void client.deactivate();
-      }
-    };
-  }, [normalizedToken]);
 
   useEffect(() => {
     if (!normalizedUserId || !normalizedToken) {

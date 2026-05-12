@@ -5,13 +5,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
+import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
-import { getStompBrokerUrl } from "@/utils/domain";
-import { Client } from "@stomp/stompjs";
-import SockJS from "sockjs-client";
+import { derivePlayedStatsFromHistoryPayload, UserHistoryPlayedStats } from "@/utils/userHistoryStats";
 import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
@@ -30,6 +29,11 @@ type UserRow = User & {
 };
 
 const USERS_PAGE_SIZE = 10;
+
+function toFiniteMetric(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 const columns: TableProps<UserRow>["columns"] = [
   {
@@ -207,7 +211,8 @@ const UsersPage: React.FC = () => {
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 1000);
   const [leaderboardSearchTerm, setLeaderboardSearchTerm] = useState("");
   const debouncedLeaderboardSearchTerm = useDebouncedValue(leaderboardSearchTerm, 1000);
-  const [liveConnected, setLiveConnected] = useState(false);
+  const [historyStatsByUserId, setHistoryStatsByUserId] = useState<Record<string, UserHistoryPlayedStats>>({});
+  const liveConnected = useApiConnectionStatus(userId.trim(), token.trim());
 
   const fetchUsers = useCallback(async () => {
     setRefreshing(true);
@@ -232,69 +237,89 @@ const UsersPage: React.FC = () => {
 
   useEffect(() => {
     const authToken = token.trim();
-    if (!authToken) {
-      setLiveConnected(false);
+    const listedUsers = users ?? [];
+    if (!authToken || listedUsers.length === 0) {
+      setHistoryStatsByUserId({});
       return;
     }
 
-    const client = new Client({
-      webSocketFactory: () => new SockJS(getStompBrokerUrl()),
-      connectHeaders: { Authorization: authToken },
-      reconnectDelay: 5000,
-      onConnect: () => {
-        setLiveConnected(true);
-      },
-      onStompError: () => {
-        setLiveConnected(false);
-      },
-      onWebSocketClose: () => {
-        setLiveConnected(false);
-      },
-      onWebSocketError: () => {
-        setLiveConnected(false);
-      },
+    const usersNeedingFallbackStats = listedUsers
+      .map((user) => {
+        const id = String(user.id ?? "").trim();
+        if (!id) {
+          return null;
+        }
+        const roundsPlayedRaw = user.roundsPlayed ?? user.rounds ?? user.roundCount;
+        const gamesPlayedRaw = user.gamesPlayed ?? user.games;
+        const hasRoundsPlayed = toFiniteMetric(roundsPlayedRaw) != null;
+        const hasGamesPlayed = toFiniteMetric(gamesPlayedRaw) != null;
+        return !hasRoundsPlayed || !hasGamesPlayed ? id : null;
+      })
+      .filter((value): value is string => value != null);
+
+    if (usersNeedingFallbackStats.length === 0) {
+      setHistoryStatsByUserId({});
+      return;
+    }
+
+    let active = true;
+    void Promise.all(
+      usersNeedingFallbackStats.map(async (id) => {
+        try {
+          const payload = await apiService.getWithAuth<unknown>(
+            `/users/${encodeURIComponent(id)}/history`,
+            authToken,
+          );
+          return [id, derivePlayedStatsFromHistoryPayload(payload, id)] as const;
+        } catch {
+          return [id, { gamesPlayed: null, roundsPlayed: null }] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!active) {
+        return;
+      }
+      const next: Record<string, UserHistoryPlayedStats> = {};
+      entries.forEach(([id, stats]) => {
+        next[id] = stats;
+      });
+      setHistoryStatsByUserId(next);
     });
 
-    client.activate();
     return () => {
-      setLiveConnected(false);
-      void client.deactivate();
+      active = false;
     };
-  }, [token]);
+  }, [apiService, token, users]);
 
   const rows: UserRow[] = useMemo(
     () =>
       (users ?? [])
         .map((user) => {
+          const normalizedId = String(user.id ?? "").trim();
+          const historyStats = normalizedId ? historyStatsByUserId[normalizedId] : undefined;
           const rowWithLegacyMetrics = user as User & {
             gamesPlayed?: number | null;
             games?: number | null;
           };
           const roundsWon = Number(user.roundsWon ?? 0);
-          const roundsPlayedRaw = user.roundsPlayed;
-          const roundsPlayed = Number.isFinite(Number(roundsPlayedRaw))
-            ? Number(roundsPlayedRaw)
-            : null;
+          const roundsPlayedRaw =
+            user.roundsPlayed ?? user.rounds ?? user.roundCount ?? historyStats?.roundsPlayed;
+          const roundsPlayed = toFiniteMetric(roundsPlayedRaw);
           const roundsWonRatePct =
             roundsPlayed != null && roundsPlayed > 0 ? (roundsWon / roundsPlayed) * 100 : null;
           const gamesWonValue = Number(user.gamesWon ?? 0);
-          const gamesPlayedRaw = rowWithLegacyMetrics.gamesPlayed ?? rowWithLegacyMetrics.games;
-          const gamesPlayed = Number.isFinite(Number(gamesPlayedRaw))
-            ? Number(gamesPlayedRaw)
-            : null;
+          const gamesPlayedRaw =
+            rowWithLegacyMetrics.gamesPlayed ?? rowWithLegacyMetrics.games ?? historyStats?.gamesPlayed;
+          const gamesPlayed = toFiniteMetric(gamesPlayedRaw);
           const gamesWonRatePct =
             gamesPlayed != null && gamesPlayed > 0 ? (gamesWonValue / gamesPlayed) * 100 : null;
           const presenceKey = toPresenceKey(user.status);
           const averageScoreRaw = user.averageScorePerRound;
           const averageScore =
-            averageScoreRaw == null || !Number.isFinite(Number(averageScoreRaw))
-              ? null
-              : Number(averageScoreRaw);
+            toFiniteMetric(averageScoreRaw);
           const rankRaw = user.overallRank;
           const overallRankValue =
-            rankRaw == null || !Number.isFinite(Number(rankRaw))
-              ? null
-              : Number(rankRaw);
+            toFiniteMetric(rankRaw);
           return {
             ...user,
             key: String(user.id ?? ""),
@@ -310,7 +335,7 @@ const UsersPage: React.FC = () => {
             presenceKey,
           };
         }),
-    [users],
+    [historyStatsByUserId, users],
   );
 
   const userRows = useMemo(

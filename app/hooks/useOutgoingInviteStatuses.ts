@@ -1,8 +1,5 @@
 import { useApi } from "@/hooks/useApi";
-import { getStompBrokerUrl } from "@/utils/domain";
-import { Client } from "@stomp/stompjs";
 import { useCallback, useEffect, useRef, useState } from "react";
-import SockJS from "sockjs-client";
 
 export type CaboInviteSentStatus = "PENDING" | "ACCEPTED" | "DECLINED";
 
@@ -10,6 +7,8 @@ export type CaboSentInviteEntry = {
   status: CaboInviteSentStatus;
   toUsername?: string;
 };
+
+const SENT_INVITES_POLL_MS = 3000;
 
 type SentRow = {
   toUserId?: unknown;
@@ -74,22 +73,22 @@ export function useOutgoingInviteStatuses(userId: string, token: string) {
       return;
     }
     hadCredentialsRef.current = true;
-    void loadSent();
+    let active = true;
+    const pollSent = async () => {
+      if (!active) {
+        return;
+      }
+      await loadSent();
+    };
 
-    const client = new Client({
-      webSocketFactory: () => new SockJS(getStompBrokerUrl()),
-      connectHeaders: { Authorization: t },
-      reconnectDelay: 5000,
-      onConnect: () => {
-        client.subscribe(`/topic/users/${uid}/invites/sent`, () => {
-          void loadSent();
-        });
-        void loadSent();
-      },
-    });
-    client.activate();
+    void pollSent();
+    const intervalId = window.setInterval(() => {
+      void pollSent();
+    }, SENT_INVITES_POLL_MS);
+
     return () => {
-      void client.deactivate();
+      active = false;
+      window.clearInterval(intervalId);
     };
   }, [loadSent, token, userId]);
 

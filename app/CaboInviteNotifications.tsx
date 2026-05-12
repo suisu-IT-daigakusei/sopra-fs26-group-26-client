@@ -4,9 +4,8 @@ import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { getStompBrokerUrl } from "@/utils/domain";
-import { Client } from "@stomp/stompjs";
 import { Button, Space } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -33,6 +32,7 @@ function normalizePendingRows(raw: unknown): CaboInvitePending[] {
 }
 
 type InviteRespondBody = { waitingLobbySessionId?: string | null };
+const INVITES_POLL_MS = 3000;
 
 export default function CaboInviteNotifications() {
   const router = useRouter();
@@ -72,39 +72,24 @@ export default function CaboInviteNotifications() {
       return;
     }
 
-    let stopped = false;
-    let client: Client | null = null;
-
-    void loadPending();
-
-    const connectInvites = async () => {
-      const { default: SockJS } = await import("sockjs-client");
-      if (stopped) {
+    let active = true;
+    const pollInvites = async () => {
+      if (!active) {
         return;
       }
-
-      client = new Client({
-        webSocketFactory: () => new SockJS(getStompBrokerUrl()),
-        connectHeaders: { Authorization: t },
-        reconnectDelay: 5000,
-        onConnect: () => {
-          client?.subscribe(`/topic/users/${uid}/invites`, () => {
-            void loadPending();
-          });
-          void loadPending();
-        },
-      });
-      client.activate();
+      await loadPending();
     };
 
-    void connectInvites();
+    void pollInvites();
+    const intervalId = window.setInterval(() => {
+      void pollInvites();
+    }, INVITES_POLL_MS);
+
     return () => {
-      stopped = true;
-      if (client) {
-        void client.deactivate();
-      }
+      active = false;
+      window.clearInterval(intervalId);
     };
-  }, [token, userId, loadPending, isAuthRoute]);
+  }, [isAuthRoute, loadPending, token, userId]);
 
   const current = pending[0];
 // Caboguy animation
@@ -189,9 +174,11 @@ return (
             gap: "5px",
 
         }}>
-            <img
+            <Image
                 src={`/caboguy${caboGuyFrame}.png`}
                 alt="Cabo Guy"
+                width={160}
+                height={160}
                 style={{
                     width: "160px",
                     height: "160px",

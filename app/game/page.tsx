@@ -1736,6 +1736,9 @@ const Game = () => {
           return () => {
               void client.deactivate();
           };
+      // Keep this websocket subscription scoped to game/seat identity;
+      // helper callbacks inside intentionally do not trigger reconnects on each render.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [
           token,
           gameId,
@@ -1798,6 +1801,8 @@ const Game = () => {
 
           setIsPeekPhase(false);
           resetPeekSelection();
+      // These helpers are intentionally not dependencies to avoid resetting peek flow on unrelated renders.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [gameStatus]);
 
       useEffect(() => {
@@ -2385,8 +2390,6 @@ const selectedPileCardStyle: React.CSSProperties = {
 // Implement logic to highlight valid cards (own cards for 7-8, opponent cards for 9-12) and capture the user's click.
 //  #28
 const [abilitySelectedOwnCardIndex, setAbilitySelectedOwnCardIndex] = useState<number | null>(null);
-const [abilitySelectedOpponentId, setAbilitySelectedOpponentId] = useState<number | null>(null);
-const [abilitySelectedOpponentCardIndex, setAbilitySelectedOpponentCardIndex] = useState<number | null>(null);
 const [isSubmittingAbility, setIsSubmittingAbility] = useState<boolean>(false);
 const [isAbilityChoicePending, setIsAbilityChoicePending] = useState<boolean>(false);
 const [isUseAbilitySelected, setIsUseAbilitySelected] = useState<boolean>(false);
@@ -2412,8 +2415,6 @@ const canInteractWithAbilityTargets =
 // reset the ability selection when the phase ends
 const resetAbilitySelection = () => {
     setAbilitySelectedOwnCardIndex(null);
-    setAbilitySelectedOpponentId(null);
-    setAbilitySelectedOpponentCardIndex(null);
     setIsSubmittingAbility(false);
 };
 
@@ -2642,6 +2643,8 @@ useEffect(() => {
         window.removeEventListener("focus", resyncOnFocus);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
+// Resync runs on focus/visibility/game changes; helper refs are intentionally omitted.
+// eslint-disable-next-line react-hooks/exhaustive-deps
 }, [apiService, gameId, token]);
 
 useEffect(() => {
@@ -2805,6 +2808,8 @@ useEffect(() => {
         window.removeEventListener("pageshow", handlePageShow);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
+// Poll cadence depends on sync state; helper refs are intentionally omitted.
+// eslint-disable-next-line react-hooks/exhaustive-deps
 }, [apiService, gameId, token, socketSynced]);
 
 const clearFlyingCardTimer = () => {
@@ -3485,12 +3490,10 @@ const centerTurnActionLabel = useMemo(() => {
     isDrawingFromDiscardPile,
     isAbilityPending,
     isAbilityChoicePending,
-    abilityPhaseLabel,
     gameStatus,
     abilitySelectedOwnCardIndex,
     canSwapDrawnCardWithHand,
     selectedDrawSource,
-    isUseAbilitySelected,
 ]);
 
 if (isIntroPhase) {
