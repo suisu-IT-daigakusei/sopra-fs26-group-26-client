@@ -177,12 +177,14 @@ reason).
 | **@liun777** | 06.05.2026 | [](https://github.com/liun777/sopra-fs26-group-26-server/commit/81409aaf29a18b615dffc502b7f5a3aaa95a7e6a) | Adapted tests for any previous changes. | Make sure all tests pass and test coverage is increased overall. |
 | **@liun777** | 08.05.2026 | [](https://github.com/liun777/sopra-fs26-group-26-server/commit/e60f59122a7d4f926898748b3d0e38023e19b76a) | Prevent spectators of a game from interfering by checking before every move that the players id matches the player whos turn it is. | Ensures that only one player is allowed to interact with cards and can do moves. |
 | **@liun777** | 08.05.2026 | [](https://github.com/liun777/sopra-fs26-group-26-server/commit/6070da3752a03836bc23af81838496d6cd3c3b94) | Add tests for all of my tasks up until end of april. | Increases test coverage and makes sure that all tasks of the backend are tested. |
-
-
+| **@aleexgort**| 08.05.2026| (https://github.com/liun777/sopra-fs26-group-26-client/commit/f47a7cb9d8a2b0ee3d10644bf117226ada76b142)| Extended the user profile page that the game statistics can also show win rate, avg score etc. |Further implementation of the personal statistics overview. |
+| **@aleexgort**| 12.05.2025| (https://github.com/liun777/sopra-fs26-group-26-client/commit/4b10b49363014593f1f351b48c105880527a29d1)| Added a new condition in the results card that if gamesPlayed === 0 the table with the results is not shown but rather we get a message the no games have been played yet.  |Adds more clarity we dont have an empty table anymore. Improved UX. |
+| **@aleexgort**| 12.05.2025| (https://github.com/liun777/sopra-fs26-group-26-client/commit/a56f46eae1f89a99fbc927cd490b804a7deefa26)| In the FinalScoreScreeen added a new component in the confirm modal with a countdown. | This way there is some more decision time there for the user, if they make a mistake they can still change their mind for a short period of time before if you just impusively clicked something you were stuck with that decision.|
+| **@aleexgort**| 12.05.2025| (https://github.com/liun777/sopra-fs26-group-26-client/commit/ebee998d0bd7291391fd3cf9f16e7175cdb5368d)| Added a second websocket subsciption to  /user/queue/redirect that automatically brings players to a lobby once a new sessionId is received.| This way the client doesnt need to repeatedly poll the server and the redirection happensimmediately as soon as the server triggers it. |
 
 
 
 ## Contributions Week 8 - [13.05.2026] to [19.05.2026]
-| **Student**        | **Date** | **Link to Commit** | **Description**                 | **Relevance**                       |
+| **Student**        | **Date** | **Link to Commit** | **Description** |**Relevance**|
 | ------------------ | -------- | ------------------ | ------------------------------- | ----------------------------------- |
 | **@user** | date | link | description | relevance |
