@@ -5,6 +5,7 @@ import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { useOnlineUsersTopic } from "@/hooks/useOnlineUsersTopic";
+import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
 import {
   useOutgoingInviteStatuses,
   type CaboSentInviteEntry,
@@ -13,6 +14,8 @@ import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
 import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
+import CharacterAvatar from "@/components/CharacterAvatar";
+import { getCharacterWavingFrameMax } from "@/utils/userSettings";
 import { Client } from "@stomp/stompjs";
 import { Button, Card, Collapse, Input, List, Popconfirm, Slider, Spin, Switch, Typography } from "antd";
 import Link from "next/link";
@@ -20,8 +23,12 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type WaitingRow = {
+  userId?: number;
   username: string;
   joinStatus: string;
+  profileCharacterId?: string;
+  characterColorId?: string;
+  ready?: boolean;
 };
 
 type WaitingView = {
@@ -36,6 +43,7 @@ type WaitingView = {
   abilitySwapSeconds?: number;
   absentRoundPoints?: number;
   players?: WaitingRow[];
+  spectators?: WaitingRow[];
 };
 
 type LobbySession = {
@@ -74,12 +82,15 @@ type LobbySlot = {
   key: string;
   label: string;
   status: string;
+  usernameKey: string;
+  userId?: number;
   isViewer: boolean;
   isHost: boolean;
   occupied: boolean;
   isOpenSlot: boolean;
-  readyKey: string;
   ready: boolean;
+  profileCharacterId?: string;
+  characterColorId?: string;
 };
 
 type LobbyTimerSettings = {
@@ -105,6 +116,10 @@ const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
   abilitySwapSeconds: 10,
   absentRoundPoints: 20,
 };
+const BLINK_MIN_INTERVAL_MS = 2600;
+const BLINK_MAX_INTERVAL_MS = 6800;
+const BLINK_CLOSED_MIN_MS = 95;
+const BLINK_CLOSED_MAX_MS = 170;
 
 const TIMER_LIMITS = {
   afkTimeoutSeconds: { min: 180, max: 600 },
@@ -122,6 +137,20 @@ function clampTimerValue(
 ): number {
   const { min, max } = TIMER_LIMITS[key];
   return Math.max(min, Math.min(max, Math.floor(nextValue)));
+}
+
+function randomInt(minInclusive: number, maxInclusive: number): number {
+  const min = Math.ceil(minInclusive);
+  const max = Math.floor(maxInclusive);
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function nextBlinkDelayMs(): number {
+  return randomInt(BLINK_MIN_INTERVAL_MS, BLINK_MAX_INTERVAL_MS);
+}
+
+function nextBlinkClosedDurationMs(): number {
+  return randomInt(BLINK_CLOSED_MIN_MS, BLINK_CLOSED_MAX_MS);
 }
 
 function resolveTimerSettingFromView(
@@ -376,7 +405,7 @@ function WaitingLobbyContent() {
   const [loading, setLoading] = useState(true);
   //Add a section in the Lobby view to display the names of users currently spectating.
   //  #49
-  const [spectators, setSpectators] = useState<string[]>([]);
+  const [spectators, setSpectators] = useState<WaitingRow[]>([]);
 
   const [lobbyWsConnected, setLobbyWsConnected] = useState(false);
   const [userIsHost, setUserIsHost] = useState(false);
@@ -392,7 +421,7 @@ function WaitingLobbyContent() {
   const debouncedInviteSearch = useDebouncedValue(inviteSearch, 1000);
   const [lobbyTimerSettings, setLobbyTimerSettings] = useState<LobbyTimerSettings>(DEFAULT_LOBBY_TIMERS);
   const [updatingTimerKey, setUpdatingTimerKey] = useState<string>("");
-  const [readyByUsername, setReadyByUsername] = useState<Record<string, boolean>>({});
+  const [togglingReady, setTogglingReady] = useState(false);
   const [startingGame, setStartingGame] = useState(false);
   const [leavingLobby, setLeavingLobby] = useState(false);
   const [, setLaunchingGame] = useState(false);
@@ -400,6 +429,12 @@ function WaitingLobbyContent() {
   const lastLobbyActivityMsRef = useRef<number>(Date.now());
   const timerSettingDebounceMs = 300;
   const timerSaveTimeoutsRef = useRef<Record<string, number>>({});
+  const previousLobbyUsernamesRef = useRef<Set<string>>(new Set());
+  const [avatarModeByUsername, setAvatarModeByUsername] = useState<Record<string, "idle" | "waving" | "thumbsup">>({});
+  const [avatarFrameByUsername, setAvatarFrameByUsername] = useState<Record<string, number>>({});
+  const [stableCharacterColorByUsername, setStableCharacterColorByUsername] = useState<Record<string, string>>({});
+  const nextBlinkAtMsByUsernameRef = useRef<Record<string, number>>({});
+  const blinkReturnAtMsByUsernameRef = useRef<Record<string, number>>({});
 
   const launchToGame = useCallback((rawGameId: unknown, rawStatus?: string, forceInitialPeekBootstrap = false) => {
     const gameId = String(rawGameId ?? "").trim();
@@ -637,9 +672,19 @@ function WaitingLobbyContent() {
       // # 116: TODO: Backend needs to include spectators in WaitingView response
       const rawSpectators = (waitingView as Record<string, unknown>)?.spectators;
       if (Array.isArray(rawSpectators)) {
-          setSpectators(rawSpectators.map(s => String((s as Record<string, unknown>)?.username ?? s)));
+        setSpectators(rawSpectators.map((spectator) => {
+          const spectatorRecord = spectator as Record<string, unknown>;
+          return {
+            userId: Number(spectatorRecord?.userId ?? spectatorRecord?.id ?? 0) || undefined,
+            username: String(spectatorRecord?.username ?? spectator ?? "").trim(),
+            joinStatus: String(spectatorRecord?.joinStatus ?? "spectator"),
+            profileCharacterId: String(spectatorRecord?.profileCharacterId ?? ""),
+            characterColorId: String(spectatorRecord?.characterColorId ?? spectatorRecord?.primaryColorId ?? ""),
+            ready: false,
+          } as WaitingRow;
+        }).filter((row) => row.username.length > 0));
       } else {
-          setSpectators([]);
+        setSpectators([]);
       }
       setIsPublicLobby(waitingView?.isPublic !== false);
       setUserIsHost(waitingView?.viewerIsHost === true);
@@ -803,30 +848,17 @@ function WaitingLobbyContent() {
     () =>
       (view?.players ?? [])
         .filter((player) => String(player.username ?? "").trim().length > 0)
+        .map((player) => ({
+          userId: Number(player.userId ?? 0) || undefined,
+          username: String(player.username ?? "").trim(),
+          joinStatus: String(player.joinStatus ?? ""),
+          profileCharacterId: String(player.profileCharacterId ?? ""),
+          characterColorId: String(player.characterColorId ?? ""),
+          ready: Boolean(player.ready),
+        }))
         .slice(0, MAX_LOBBY_PLAYERS),
     [view],
   );
-
-  useEffect(() => {
-    const presentUsernames = new Set(
-      waitingPlayers
-        .map((player) => normalizeValue(player.username))
-        .filter((name) => name.length > 0),
-    );
-
-    setReadyByUsername((prev) => {
-      let changed = false;
-      const next: Record<string, boolean> = {};
-      for (const [key, value] of Object.entries(prev)) {
-        if (presentUsernames.has(key)) {
-          next[key] = value;
-        } else {
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [waitingPlayers]);
 
   const joinedByUsername = useMemo(() => {
     const joinedUsers: Record<string, true> = {};
@@ -859,6 +891,252 @@ function WaitingLobbyContent() {
   const usersForInvite = useMemo(() => {
     return onlineUsers;
   }, [onlineUsers]);
+
+  const characterByUsername = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    for (const player of waitingPlayers) {
+      const usernameKey = normalizeValue(player.username);
+      if (!usernameKey) {
+        continue;
+      }
+      mapping[usernameKey] = String(player.profileCharacterId ?? "");
+    }
+    for (const spectator of spectators) {
+      const usernameKey = normalizeValue(spectator.username);
+      if (!usernameKey) {
+        continue;
+      }
+      mapping[usernameKey] = String(spectator.profileCharacterId ?? "");
+    }
+    return mapping;
+  }, [spectators, waitingPlayers]);
+
+  const incomingCharacterColorByUsername = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    for (const player of waitingPlayers) {
+      const usernameKey = normalizeValue(player.username);
+      if (!usernameKey) {
+        continue;
+      }
+      const rawColorId = String(player.characterColorId ?? "").trim();
+      if (rawColorId) {
+        mapping[usernameKey] = rawColorId;
+      }
+    }
+    for (const spectator of spectators) {
+      const usernameKey = normalizeValue(spectator.username);
+      if (!usernameKey) {
+        continue;
+      }
+      const rawColorId = String(spectator.characterColorId ?? "").trim();
+      if (rawColorId) {
+        mapping[usernameKey] = rawColorId;
+      }
+    }
+    return mapping;
+  }, [spectators, waitingPlayers]);
+
+  useEffect(() => {
+    const presentUsernameKeys = new Set<string>();
+    waitingPlayers.forEach((player) => {
+      const usernameKey = normalizeValue(player.username);
+      if (usernameKey) {
+        presentUsernameKeys.add(usernameKey);
+      }
+    });
+    spectators.forEach((spectator) => {
+      const usernameKey = normalizeValue(spectator.username);
+      if (usernameKey) {
+        presentUsernameKeys.add(usernameKey);
+      }
+    });
+
+    setStableCharacterColorByUsername((previous) => {
+      const next: Record<string, string> = {};
+      let changed = false;
+
+      for (const usernameKey of presentUsernameKeys) {
+        const previousColor = previous[usernameKey];
+        const incomingColor = incomingCharacterColorByUsername[usernameKey];
+        if (incomingColor) {
+          const isWaving = avatarModeByUsername[usernameKey] === "waving";
+          next[usernameKey] =
+            previousColor && previousColor !== incomingColor && isWaving
+              ? previousColor
+              : incomingColor;
+        } else if (previousColor) {
+          next[usernameKey] = previousColor;
+        }
+
+        if (next[usernameKey] !== previousColor) {
+          changed = true;
+        }
+      }
+
+      if (!changed && Object.keys(previous).length !== Object.keys(next).length) {
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
+  }, [avatarModeByUsername, incomingCharacterColorByUsername, spectators, waitingPlayers]);
+
+  const readyByUsernameFromLobby = useMemo(() => {
+    const mapping: Record<string, boolean> = {};
+    for (const player of waitingPlayers) {
+      const usernameKey = normalizeValue(player.username);
+      if (!usernameKey) {
+        continue;
+      }
+      const isHost = normalizeValue(player.joinStatus) === "host";
+      mapping[usernameKey] = isHost || Boolean(player.ready);
+    }
+    return mapping;
+  }, [waitingPlayers]);
+
+  useEffect(() => {
+    const presentPlayers = waitingPlayers
+      .map((player) => ({
+        usernameKey: normalizeValue(player.username),
+        isReady: normalizeValue(player.joinStatus) === "host" || Boolean(player.ready),
+      }))
+      .filter((entry) => entry.usernameKey.length > 0);
+    const presentUsernameKeys = new Set(presentPlayers.map((entry) => entry.usernameKey));
+
+    setAvatarModeByUsername((previousModes) => {
+      const nextModes: Record<string, "idle" | "waving" | "thumbsup"> = {};
+      for (const entry of presentPlayers) {
+        const previousMode = previousModes[entry.usernameKey] ?? "idle";
+        const isNewlyJoined = !previousLobbyUsernamesRef.current.has(entry.usernameKey);
+        if (isNewlyJoined) {
+          nextModes[entry.usernameKey] = "waving";
+          continue;
+        }
+        if (previousMode === "waving") {
+          nextModes[entry.usernameKey] = "waving";
+          continue;
+        }
+        nextModes[entry.usernameKey] = entry.isReady ? "thumbsup" : "idle";
+      }
+
+      setAvatarFrameByUsername((previousFrames) => {
+        const nextFrames: Record<string, number> = {};
+        let changed = false;
+        for (const [usernameKey, nextMode] of Object.entries(nextModes)) {
+          const previousMode = previousModes[usernameKey];
+          const previousFrame = previousFrames[usernameKey] ?? 1;
+          if (nextMode !== previousMode) {
+            nextFrames[usernameKey] = nextMode === "thumbsup" ? 1 : 1;
+            changed = true;
+            if (nextMode === "thumbsup") {
+              nextBlinkAtMsByUsernameRef.current[usernameKey] = Date.now() + nextBlinkDelayMs();
+            } else {
+              delete nextBlinkAtMsByUsernameRef.current[usernameKey];
+              delete blinkReturnAtMsByUsernameRef.current[usernameKey];
+            }
+            continue;
+          }
+          nextFrames[usernameKey] = previousFrame;
+        }
+
+        for (const previousKey of Object.keys(previousFrames)) {
+          if (presentUsernameKeys.has(previousKey)) {
+            continue;
+          }
+          changed = true;
+          delete nextBlinkAtMsByUsernameRef.current[previousKey];
+          delete blinkReturnAtMsByUsernameRef.current[previousKey];
+        }
+
+        return changed ? nextFrames : previousFrames;
+      });
+
+      previousLobbyUsernamesRef.current = presentUsernameKeys;
+      return nextModes;
+    });
+  }, [waitingPlayers]);
+
+  useEffect(() => {
+    const tickIntervalMs = 180;
+    const intervalId = window.setInterval(() => {
+      const now = Date.now();
+      const completedWaveUsernames: string[] = [];
+
+      setAvatarFrameByUsername((previousFrames) => {
+        const nextFrames = { ...previousFrames };
+        let changed = false;
+
+        for (const [usernameKey, mode] of Object.entries(avatarModeByUsername)) {
+          const currentFrame = nextFrames[usernameKey] ?? 1;
+          if (mode === "waving") {
+            const maxFrame = getCharacterWavingFrameMax(characterByUsername[usernameKey]);
+            if (currentFrame < maxFrame) {
+              nextFrames[usernameKey] = currentFrame + 1;
+              changed = true;
+            } else {
+              completedWaveUsernames.push(usernameKey);
+            }
+            continue;
+          }
+
+          if (mode === "thumbsup") {
+            if (currentFrame < 3) {
+              nextFrames[usernameKey] = currentFrame + 1;
+              changed = true;
+              if (nextFrames[usernameKey] === 3 && nextBlinkAtMsByUsernameRef.current[usernameKey] == null) {
+                nextBlinkAtMsByUsernameRef.current[usernameKey] = now + nextBlinkDelayMs();
+              }
+              continue;
+            }
+
+            if (currentFrame === 9) {
+              let blinkReturnAt = blinkReturnAtMsByUsernameRef.current[usernameKey];
+              if (blinkReturnAt == null) {
+                blinkReturnAt = now + nextBlinkClosedDurationMs();
+                blinkReturnAtMsByUsernameRef.current[usernameKey] = blinkReturnAt;
+              }
+              if (now >= blinkReturnAt) {
+                nextFrames[usernameKey] = 3;
+                nextBlinkAtMsByUsernameRef.current[usernameKey] = now + nextBlinkDelayMs();
+                delete blinkReturnAtMsByUsernameRef.current[usernameKey];
+                changed = true;
+              }
+              continue;
+            }
+
+            const nextBlinkAt = nextBlinkAtMsByUsernameRef.current[usernameKey] ?? (now + nextBlinkDelayMs());
+            nextBlinkAtMsByUsernameRef.current[usernameKey] = nextBlinkAt;
+            if (now >= nextBlinkAt) {
+              nextFrames[usernameKey] = 9;
+              blinkReturnAtMsByUsernameRef.current[usernameKey] = now + nextBlinkClosedDurationMs();
+              changed = true;
+            }
+            continue;
+          }
+
+          if (currentFrame !== 1) {
+            nextFrames[usernameKey] = 1;
+            changed = true;
+          }
+        }
+
+        return changed ? nextFrames : previousFrames;
+      });
+
+      if (completedWaveUsernames.length > 0) {
+        setAvatarModeByUsername((previousModes) => {
+          const nextModes = { ...previousModes };
+          for (const usernameKey of completedWaveUsernames) {
+            nextModes[usernameKey] = readyByUsernameFromLobby[usernameKey] ? "thumbsup" : "idle";
+          }
+          return nextModes;
+        });
+      }
+    }, tickIntervalMs);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [avatarModeByUsername, characterByUsername, readyByUsernameFromLobby]);
 
   const inviteRows = useMemo(
     () =>
@@ -920,19 +1198,24 @@ function WaitingLobbyContent() {
       const fallbackLabel = isHost ? "Host" : "Open Slot";
       const label = player?.username?.trim() || fallbackLabel;
       const isOpenSlot = !occupied && !isHost;
-      const readyKey = occupied ? normalizeValue(player?.username) : "";
-      const ready = occupied ? Boolean(readyKey && readyByUsername[readyKey]) : false;
+      const usernameKey = occupied ? normalizeValue(player?.username) : "";
+      const ready = occupied
+        ? (isHost || Boolean(player?.ready))
+        : false;
 
       slots.push({
         key: `slot-${index + 1}`,
         label,
+        usernameKey,
+        userId: player?.userId,
         status: toLobbySlotStatus(String(player?.joinStatus ?? ""), isHost, occupied),
         isViewer: index === viewerIndex,
         isHost,
         occupied,
         isOpenSlot,
-        readyKey,
         ready,
+        profileCharacterId: player?.profileCharacterId,
+        characterColorId: player?.characterColorId,
       });
     }
 
@@ -940,18 +1223,33 @@ function WaitingLobbyContent() {
       lobbySlots: slots,
       presentCount: waitingPlayers.length,
     };
-  }, [waitingPlayers, userIsHost, readyByUsername]);
+  }, [waitingPlayers, userIsHost]);
 
   const viewerLobbySlot = useMemo(
     () => lobbySlots.find((slot) => slot.isViewer && slot.occupied),
     [lobbySlots],
   );
 
-  const viewerReadyKey = viewerLobbySlot?.readyKey ?? "";
+  const viewerReadyKey = viewerLobbySlot?.usernameKey ?? "";
   const viewerIsReady = Boolean(viewerLobbySlot?.ready);
+  const allNonHostPlayersReady = useMemo(
+    () => lobbySlots
+      .filter((slot) => slot.occupied && !slot.isHost)
+      .every((slot) => slot.ready),
+    [lobbySlots],
+  );
 
   const sessionId = String(view?.sessionId ?? sessionIdParam ?? "").trim();
   const lobbyConnectionIsGreen = lobbyApiConnected;
+  const lobbyAfkWarningLeadSeconds = getAfkWarningLeadSeconds(lobbyTimerSettings.afkTimeoutSeconds);
+  const showLobbyAfkWarning =
+    sessionId.length > 0 &&
+    lobbyAfkRemainingSeconds <= lobbyAfkWarningLeadSeconds;
+
+  useAttentionTitleBlink({
+    enabled: showLobbyAfkWarning,
+    alertTitle: "AFK WARNING - Return to lobby",
+  });
 
   useEffect(() => {
     const sid = sessionId.trim();
@@ -1049,13 +1347,26 @@ function WaitingLobbyContent() {
   };
 
   const handleViewerReadyToggle = () => {
-    if (!viewerReadyKey) {
+    if (!viewerReadyKey || togglingReady) {
       return;
     }
-    setReadyByUsername((prev) => ({
-      ...prev,
-      [viewerReadyKey]: !prev[viewerReadyKey],
-    }));
+    const authToken = token.trim();
+    const sid = sessionId.trim();
+    if (!authToken || !sid) {
+      return;
+    }
+    setTogglingReady(true);
+    void api.patchWithAuth(
+      `/lobbies/${encodeURIComponent(sid)}/ready`,
+      { ready: !viewerIsReady },
+      authToken,
+    ).then(() => {
+      void loadView();
+    }).catch(() => {
+      // keep current UI state on failure
+    }).finally(() => {
+      setTogglingReady(false);
+    });
   };
 
   const updateLobbyTimerSetting = async (
@@ -1252,7 +1563,7 @@ function WaitingLobbyContent() {
               {userIsHost ? <span>As the host you can invite up to 3 players.</span> : null}
               {/*host vs other players see diff things*/}
             </div>
-            {lobbyAfkRemainingSeconds <= getAfkWarningLeadSeconds(lobbyTimerSettings.afkTimeoutSeconds) ? (
+            {showLobbyAfkWarning ? (
               <div className="lobby-afk-warning-banner" role="status" aria-live="polite">
                 <span>AFK timeout in </span>
                 <strong>{lobbyAfkRemainingSeconds}s</strong>
@@ -1279,9 +1590,35 @@ function WaitingLobbyContent() {
                   className={`lobby-slot-row lobby-slot-highlight-row${slot.isViewer ? " lobby-slot-highlight-row-active" : ""}${slot.isOpenSlot ? " lobby-slot-row-open" : ""}`}
                 >
                   <div className="lobby-slot-label">
-                    <span
-                      className={`lobby-ready-bar${slot.occupied ? (slot.ready ? " lobby-ready-bar-ready" : " lobby-ready-bar-not-ready") : " lobby-ready-bar-empty"}`}
-                    />
+                    {slot.occupied ? (
+                      <span className="lobby-slot-avatar-wrap" aria-hidden="true">
+                        {(() => {
+                          const avatarMode = avatarModeByUsername[slot.usernameKey] ?? (slot.ready ? "thumbsup" : "idle");
+                          const avatarFrame = avatarFrameByUsername[slot.usernameKey] ?? 1;
+                          const avatarVariant =
+                            avatarMode === "waving"
+                              ? "waving"
+                              : avatarMode === "thumbsup"
+                                ? "thumbsup"
+                                : "profile";
+                          return (
+                        <CharacterAvatar
+                          characterId={slot.profileCharacterId || characterByUsername[slot.usernameKey]}
+                          primaryColorId={
+                            stableCharacterColorByUsername[slot.usernameKey] ||
+                            slot.characterColorId
+                          }
+                          variant={avatarVariant}
+                          frame={avatarFrame}
+                          alt=""
+                          width={56}
+                          height={56}
+                          className="lobby-slot-avatar"
+                        />
+                          );
+                        })()}
+                      </span>
+                    ) : null}
                     <span className={slot.isOpenSlot ? "lobby-open-slot-text" : ""}>
                       {slot.label}
                     </span>
@@ -1349,11 +1686,24 @@ function WaitingLobbyContent() {
                   <List
                       className="lobby-players-list"
                       dataSource={spectators}
-                      rowKey={(name) => name}
-                      renderItem={(name) => (
+                      rowKey={(spectator) => String(spectator.userId ?? spectator.username)}
+                      renderItem={(spectator) => (
                           <List.Item className="lobby-slot-row lobby-slot-highlight-row">
                               <div className="lobby-slot-label">
-                                  <span>{name}</span>
+                                  <span className="lobby-slot-avatar-wrap" aria-hidden="true">
+                                      <CharacterAvatar
+                                          characterId={spectator.profileCharacterId || characterByUsername[normalizeValue(spectator.username)]}
+                                          primaryColorId={
+                                            stableCharacterColorByUsername[normalizeValue(spectator.username)] ||
+                                            spectator.characterColorId
+                                          }
+                                          alt=""
+                                          width={56}
+                                          height={56}
+                                          className="lobby-slot-avatar"
+                                      />
+                                  </span>
+                                  <span>{spectator.username}</span>
                               </div>
                               <span className="lobby-slot-status-pill lobby-slot-status-open">
                                   Spectating
@@ -1678,7 +2028,7 @@ function WaitingLobbyContent() {
                 <Button
                   type="primary"
                   className="create-lobby-start-game-btn"
-                  disabled={presentCount < 2 || startingGame}
+                  disabled={presentCount < 2 || !allNonHostPlayersReady || startingGame}
                   loading={startingGame}
                   onClick={() => void handleStartGame()}
                 >
@@ -1688,7 +2038,8 @@ function WaitingLobbyContent() {
                 <Button
                   type="default"
                   className={`create-lobby-start-game-btn lobby-viewer-ready-main-btn${!viewerReadyKey ? " lobby-viewer-ready-main-btn-not-ready" : viewerIsReady ? " lobby-viewer-ready-main-btn-no-longer-ready" : " lobby-viewer-ready-main-btn-ready-up"}`}
-                  disabled={!viewerReadyKey}
+                  disabled={!viewerReadyKey || togglingReady}
+                  loading={togglingReady}
                   onClick={handleViewerReadyToggle}
                 >
                   {!viewerReadyKey

@@ -6,51 +6,36 @@ import { useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { User } from "@/types/user";
-import { Button, Card, Form, Input, Select, Slider, message } from "antd";
+import CharacterAvatar from "@/components/CharacterAvatar";
+import {
+  type BackgroundOption,
+  USER_DEFAULT_BACKGROUND_OPTIONS,
+  USER_DEFAULT_CHARACTER_ID,
+  USER_DEFAULT_GAME_BACKGROUND_ID,
+  USER_DEFAULT_MENU_BACKGROUND_ID,
+  USER_DEFAULT_MUSIC_VOLUME,
+  USER_DEFAULT_PRIMARY_COLOR_ID,
+  USER_DEFAULT_SOUND_EFFECTS_VOLUME,
+  USER_DEFAULT_TEXT_COLOR_ID,
+  USER_PRIMARY_COLOR_OPTIONS,
+  USER_PRIORITY_COLOR_OPTIONS,
+  USER_PRIORITY_LABELS,
+  USER_PROFILE_CHARACTER_OPTIONS,
+  USER_TEXT_COLOR_OPTIONS,
+  backgroundFileToCssUrl,
+  hasDuplicatePriorityColors,
+  normalizeCharacterId,
+  normalizeMusicBlacklist,
+  normalizePreferredColorPriority,
+  normalizePrimaryColorId,
+  normalizeTextColorId,
+  normalizeVolume,
+  resolveBackgroundFile,
+} from "@/utils/userSettings";
+import { Button, Card, Form, Input, Select, Slider, Switch, message } from "antd";
 
 const BIO_MAX_LENGTH = 180;
 const DEFAULT_BIO = "This player hasn't added a bio yet.";
-
-const CHARACTER_OPTIONS = [
-  { id: "char01", src: "/char01_profile.png", label: "Character 1" },
-  { id: "char02", src: "/char02_profile.png", label: "Character 2" },
-  { id: "char03", src: "/char03_waving_1.png", label: "Character 3" },
-  { id: "char04", src: "/char04_profile.png", label: "Character 4" },
-  { id: "char05", src: "/char05_profile.png", label: "Character 5" },
-  { id: "char06", src: "/char06_profile.png", label: "Character 6" },
-  { id: "char07", src: "/char07_profile.png", label: "Character 7" },
-  { id: "char08", src: "/char08_profile.png", label: "Character 8" },
-] as const;
-
-const PRIORITY_COLOR_OPTIONS = ["black", "blue", "green", "orange"] as const;
-const PRIORITY_LABELS = ["1st", "2nd", "3rd", "4th"] as const;
-
-const MENU_BACKGROUND_OPTIONS = [
-  { id: "menu-bg-1", src: "/background_01.png", label: "Current" },
-  { id: "menu-bg-2", src: "/general_loading_00a.png", label: "Preview A" },
-  { id: "menu-bg-3", src: "/general_loading_00b.png", label: "Preview B" },
-  { id: "menu-bg-4", src: "/login_loading_01.png", label: "Preview C" },
-] as const;
-
-const GAME_BACKGROUND_OPTIONS = [
-  { id: "game-bg-1", src: "/background_01.png", label: "Current" },
-  { id: "game-bg-2", src: "/login_loading_02.png", label: "Preview A" },
-  { id: "game-bg-3", src: "/login_loading_03.png", label: "Preview B" },
-  { id: "game-bg-4", src: "/general_loading_01.png", label: "Preview C" },
-] as const;
-
-const PRIMARY_COLOR_OPTIONS = [
-  { id: "slate", hex: "#6973a8", label: "Slate" },
-  { id: "orange", hex: "#f2994a", label: "Orange" },
-  { id: "graphite", hex: "#6c7077", label: "Graphite" },
-  { id: "forest", hex: "#4f9f65", label: "Forest" },
-  { id: "ocean", hex: "#4386d6", label: "Ocean" },
-] as const;
-
-const TEXT_COLOR_OPTIONS = [
-  { id: "dark", hex: "#1e2329", label: "Dark" },
-  { id: "white", hex: "#ffffff", label: "White" },
-] as const;
 
 const SOUND_SLIDER_MARKS: Record<number, string> = Array.from({ length: 11 }, (_, index) => index * 10)
   .reduce<Record<number, string>>((acc, value) => {
@@ -80,6 +65,7 @@ function normalizeTagList(values: string[]): string[] {
 }
 
 type GraphicsSelectionState = {
+  tutorialsEnabled: boolean;
   selectedMenuBackground: string;
   selectedGameBackground: string;
   selectedPrimaryColor: string;
@@ -92,57 +78,145 @@ type SoundsSelectionState = {
   musicBlacklist: string[];
 };
 
+type BackgroundOptionsResponse = {
+  backgrounds?: BackgroundOption[];
+  availableFiles?: string[];
+};
+
+const MENU_BACKGROUND_STORAGE_KEY = "menuBackgroundAsset";
+const GAME_BACKGROUND_STORAGE_KEY = "gameBackgroundAsset";
+const PRIMARY_COLOR_STORAGE_KEY = "primaryColorId";
+const TEXT_COLOR_STORAGE_KEY = "textColorId";
+
 const SettingsPage = () => {
   const router = useRouter();
   const apiService = useApi();
   const [form] = Form.useForm();
 
   const [savingPassword, setSavingPassword] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
-  const [savingBio, setSavingBio] = useState(false);
   const [bioValue, setBioValue] = useState("");
   const [bioDraft, setBioDraft] = useState("");
 
-  const [selectedCharacter, setSelectedCharacter] = useState<string>(CHARACTER_OPTIONS[0].id);
-  const [savedCharacter, setSavedCharacter] = useState<string>(CHARACTER_OPTIONS[0].id);
-  const [savingCharacter, setSavingCharacter] = useState(false);
-  const [colorPriority, setColorPriority] = useState<string[]>(["black", "blue", "green", "orange"]);
-  const [savedColorPriority, setSavedColorPriority] = useState<string[]>(["black", "blue", "green", "orange"]);
-  const [savingPriority, setSavingPriority] = useState(false);
+  const [selectedCharacter, setSelectedCharacter] = useState<string>(USER_DEFAULT_CHARACTER_ID);
+  const [savedCharacter, setSavedCharacter] = useState<string>(USER_DEFAULT_CHARACTER_ID);
+  const [colorPriority, setColorPriority] = useState<string[]>(normalizePreferredColorPriority(null));
+  const [savedColorPriority, setSavedColorPriority] = useState<string[]>(normalizePreferredColorPriority(null));
+  const [backgroundOptions, setBackgroundOptions] = useState<BackgroundOption[]>(USER_DEFAULT_BACKGROUND_OPTIONS);
+  const [availableBackgroundFiles, setAvailableBackgroundFiles] = useState<string[]>(
+    USER_DEFAULT_BACKGROUND_OPTIONS
+      .map((option) => String(option.id ?? "").trim().toLowerCase())
+      .filter((value, index, allValues) => value.length > 0 && allValues.indexOf(value) === index),
+  );
 
-  const [selectedMenuBackground, setSelectedMenuBackground] = useState<string>(MENU_BACKGROUND_OPTIONS[0].id);
-  const [selectedGameBackground, setSelectedGameBackground] = useState<string>(GAME_BACKGROUND_OPTIONS[0].id);
-  const [selectedPrimaryColor, setSelectedPrimaryColor] = useState<string>(PRIMARY_COLOR_OPTIONS[0].id);
-  const [selectedTextColor, setSelectedTextColor] = useState<string>(TEXT_COLOR_OPTIONS[0].id);
+  const [selectedMenuBackground, setSelectedMenuBackground] = useState<string>(USER_DEFAULT_MENU_BACKGROUND_ID);
+  const [selectedGameBackground, setSelectedGameBackground] = useState<string>(USER_DEFAULT_GAME_BACKGROUND_ID);
+  const [selectedPrimaryColor, setSelectedPrimaryColor] = useState<string>(USER_DEFAULT_PRIMARY_COLOR_ID);
+  const [selectedTextColor, setSelectedTextColor] = useState<string>(USER_DEFAULT_TEXT_COLOR_ID);
+  const [tutorialsEnabled, setTutorialsEnabled] = useState(true);
   const [savedGraphicsSelection, setSavedGraphicsSelection] = useState<GraphicsSelectionState>({
-    selectedMenuBackground: MENU_BACKGROUND_OPTIONS[0].id,
-    selectedGameBackground: GAME_BACKGROUND_OPTIONS[0].id,
-    selectedPrimaryColor: PRIMARY_COLOR_OPTIONS[0].id,
-    selectedTextColor: TEXT_COLOR_OPTIONS[0].id,
+    tutorialsEnabled: true,
+    selectedMenuBackground: USER_DEFAULT_MENU_BACKGROUND_ID,
+    selectedGameBackground: USER_DEFAULT_GAME_BACKGROUND_ID,
+    selectedPrimaryColor: USER_DEFAULT_PRIMARY_COLOR_ID,
+    selectedTextColor: USER_DEFAULT_TEXT_COLOR_ID,
   });
   const [savingGraphics, setSavingGraphics] = useState(false);
 
-  const [musicVolume, setMusicVolume] = useState(60);
-  const [soundEffectsVolume, setSoundEffectsVolume] = useState(70);
+  const [musicVolume, setMusicVolume] = useState(USER_DEFAULT_MUSIC_VOLUME);
+  const [soundEffectsVolume, setSoundEffectsVolume] = useState(USER_DEFAULT_SOUND_EFFECTS_VOLUME);
   const [musicBlacklist, setMusicBlacklist] = useState<string[]>([]);
   const [savedSoundsSelection, setSavedSoundsSelection] = useState<SoundsSelectionState>({
-    musicVolume: 60,
-    soundEffectsVolume: 70,
+    musicVolume: USER_DEFAULT_MUSIC_VOLUME,
+    soundEffectsVolume: USER_DEFAULT_SOUND_EFFECTS_VOLUME,
     musicBlacklist: [] as string[],
   });
   const [savingSounds, setSavingSounds] = useState(false);
 
   const { value: userId, clear: clearUserId } = useLocalStorage<string>("userId", "");
   const { value: token, clear: clearToken } = useLocalStorage<string>("token", "");
+  const { set: setStoredPrimaryColorId } = useLocalStorage<string>(
+    PRIMARY_COLOR_STORAGE_KEY,
+    USER_DEFAULT_PRIMARY_COLOR_ID,
+  );
+  const { set: setStoredTextColorId } = useLocalStorage<string>(
+    TEXT_COLOR_STORAGE_KEY,
+    USER_DEFAULT_TEXT_COLOR_ID,
+  );
   const skipUnsavedGuardRef = useRef(false);
   const passwordValue = Form.useWatch("password", form);
   const confirmPasswordValue = Form.useWatch("confirmPassword", form);
+  const availableBackgroundFilesSet = useMemo(
+    () => new Set<string>(availableBackgroundFiles),
+    [availableBackgroundFiles],
+  );
 
   useEffect(() => {
     if (!userId.trim()) {
       router.replace("/login");
     }
   }, [userId, router]);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadBackgroundOptions = async () => {
+      try {
+        const response = await fetch("/api/background-options", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json() as BackgroundOptionsResponse;
+        if (!active || !Array.isArray(payload.backgrounds)) {
+          return;
+        }
+
+        const seenIds = new Set<string>();
+        const nextOptions: BackgroundOption[] = [];
+        for (const option of payload.backgrounds) {
+          const id = String(option?.id ?? "").trim().toLowerCase();
+          const src = String(option?.src ?? "").trim();
+          const label = String(option?.label ?? "").trim();
+          if (!id || !src || seenIds.has(id)) {
+            continue;
+          }
+          seenIds.add(id);
+          nextOptions.push({
+            id,
+            src,
+            label: label || id,
+          });
+        }
+
+        if (nextOptions.length > 0) {
+          setBackgroundOptions(nextOptions);
+        }
+
+        const payloadAvailableFiles = Array.isArray(payload.availableFiles)
+          ? payload.availableFiles
+            .map((value) => String(value ?? "").trim().toLowerCase())
+            .filter((value, index, allValues) => value.length > 0 && allValues.indexOf(value) === index)
+          : [];
+        if (payloadAvailableFiles.length > 0) {
+          setAvailableBackgroundFiles(payloadAvailableFiles);
+        } else if (nextOptions.length > 0) {
+          setAvailableBackgroundFiles(nextOptions.map((entry) => entry.id));
+        }
+      } catch {
+        // keep default local background options
+      }
+    };
+
+    void loadBackgroundOptions();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const uid = userId.trim();
@@ -166,12 +240,92 @@ const SettingsPage = () => {
         const nextBio = String(fetchedUser?.bio ?? "").trim();
         setBioValue(nextBio);
         setBioDraft(nextBio);
+
+        const nextCharacter = normalizeCharacterId(fetchedUser?.profileCharacterId);
+        setSelectedCharacter(nextCharacter);
+        setSavedCharacter(nextCharacter);
+
+        const nextPriority = normalizePreferredColorPriority(fetchedUser?.preferredColorPriority);
+        setColorPriority(nextPriority);
+        setSavedColorPriority(nextPriority);
+
+        const nextMenuBackgroundId = resolveBackgroundFile(
+          fetchedUser?.menuBackgroundId,
+          availableBackgroundFilesSet,
+        );
+        const nextGameBackgroundId = resolveBackgroundFile(
+          fetchedUser?.gameBackgroundId,
+          availableBackgroundFilesSet,
+        );
+        const nextPrimaryColorId = normalizePrimaryColorId(fetchedUser?.primaryColorId);
+        const nextTextColorId = normalizeTextColorId(fetchedUser?.textColorId);
+        const nextTutorialsEnabled = fetchedUser?.tutorialsEnabled !== false;
+        setTutorialsEnabled(nextTutorialsEnabled);
+        setSelectedMenuBackground(nextMenuBackgroundId);
+        setSelectedGameBackground(nextGameBackgroundId);
+        setSelectedPrimaryColor(nextPrimaryColorId);
+        setStoredPrimaryColorId(nextPrimaryColorId);
+        setSelectedTextColor(nextTextColorId);
+        setStoredTextColorId(nextTextColorId);
+        setSavedGraphicsSelection({
+          tutorialsEnabled: nextTutorialsEnabled,
+          selectedMenuBackground: nextMenuBackgroundId,
+          selectedGameBackground: nextGameBackgroundId,
+          selectedPrimaryColor: nextPrimaryColorId,
+          selectedTextColor: nextTextColorId,
+        });
+
+        const nextMusicVolume = normalizeVolume(fetchedUser?.musicVolume, USER_DEFAULT_MUSIC_VOLUME);
+        const nextEffectsVolume = normalizeVolume(fetchedUser?.soundEffectsVolume, USER_DEFAULT_SOUND_EFFECTS_VOLUME);
+        const nextMusicBlacklist = normalizeMusicBlacklist(fetchedUser?.musicBlacklist);
+        setMusicVolume(nextMusicVolume);
+        setSoundEffectsVolume(nextEffectsVolume);
+        setMusicBlacklist(nextMusicBlacklist);
+        setSavedSoundsSelection({
+          musicVolume: nextMusicVolume,
+          soundEffectsVolume: nextEffectsVolume,
+          musicBlacklist: nextMusicBlacklist,
+        });
       } catch {
         if (!active) {
           return;
         }
         setBioValue("");
         setBioDraft("");
+        setSelectedCharacter(USER_DEFAULT_CHARACTER_ID);
+        setSavedCharacter(USER_DEFAULT_CHARACTER_ID);
+        setColorPriority(normalizePreferredColorPriority(null));
+        setSavedColorPriority(normalizePreferredColorPriority(null));
+        const fallbackMenuBackground = resolveBackgroundFile(
+          USER_DEFAULT_MENU_BACKGROUND_ID,
+          availableBackgroundFilesSet,
+        );
+        const fallbackGameBackground = resolveBackgroundFile(
+          USER_DEFAULT_GAME_BACKGROUND_ID,
+          availableBackgroundFilesSet,
+        );
+        setSelectedMenuBackground(fallbackMenuBackground);
+        setSelectedGameBackground(fallbackGameBackground);
+        setSelectedPrimaryColor(USER_DEFAULT_PRIMARY_COLOR_ID);
+        setStoredPrimaryColorId(USER_DEFAULT_PRIMARY_COLOR_ID);
+        setSelectedTextColor(USER_DEFAULT_TEXT_COLOR_ID);
+        setStoredTextColorId(USER_DEFAULT_TEXT_COLOR_ID);
+        setTutorialsEnabled(true);
+        setSavedGraphicsSelection({
+          tutorialsEnabled: true,
+          selectedMenuBackground: fallbackMenuBackground,
+          selectedGameBackground: fallbackGameBackground,
+          selectedPrimaryColor: USER_DEFAULT_PRIMARY_COLOR_ID,
+          selectedTextColor: USER_DEFAULT_TEXT_COLOR_ID,
+        });
+        setMusicVolume(USER_DEFAULT_MUSIC_VOLUME);
+        setSoundEffectsVolume(USER_DEFAULT_SOUND_EFFECTS_VOLUME);
+        setMusicBlacklist([]);
+        setSavedSoundsSelection({
+          musicVolume: USER_DEFAULT_MUSIC_VOLUME,
+          soundEffectsVolume: USER_DEFAULT_SOUND_EFFECTS_VOLUME,
+          musicBlacklist: [],
+        });
       }
     };
 
@@ -180,18 +334,32 @@ const SettingsPage = () => {
     return () => {
       active = false;
     };
-  }, [apiService, token, userId]);
+  }, [apiService, availableBackgroundFilesSet, setStoredPrimaryColorId, setStoredTextColorId, token, userId]);
 
   const colorPriorityOptionsByIndex = useMemo(
-    () => colorPriority.map((current, index) => (
-      PRIORITY_COLOR_OPTIONS.map((colorOption) => ({
-        value: colorOption,
-        label: colorOption[0].toUpperCase() + colorOption.slice(1),
-        disabled: colorPriority.some((picked, pickedIndex) => (
-          pickedIndex !== index && picked === colorOption && current !== colorOption
-        )),
-      }))
-    )),
+    () => {
+      const colorOptionById = new Map<string, { label: string; hex: string }>(
+        USER_PRIMARY_COLOR_OPTIONS.map((entry) => [entry.id, { label: entry.label, hex: entry.hex }]),
+      );
+
+      const renderPriorityOptionLabel = (colorId: string) => {
+        const option = colorOptionById.get(colorId);
+        return (
+          <span className="settings-priority-option-label">
+            <span className="settings-priority-option-dot" style={{ ["--settings-priority-dot-color" as string]: option?.hex ?? "#7a7f87" }} />
+            <span>{option?.label ?? colorId}</span>
+          </span>
+        );
+      };
+
+      return colorPriority.map(() => (
+        USER_PRIORITY_COLOR_OPTIONS.map((colorOption) => ({
+          value: colorOption,
+          label: renderPriorityOptionLabel(colorOption),
+          disabled: false,
+        }))
+      ));
+    },
     [colorPriority],
   );
 
@@ -200,9 +368,11 @@ const SettingsPage = () => {
   const normalizedSavedBio = bioValue.trim();
 
   const characterDirty = selectedCharacter !== savedCharacter;
-  const bioDirty = editingBio && normalizedBioDraft !== normalizedSavedBio;
+  const bioDirty = normalizedBioDraft !== normalizedSavedBio;
   const colorPriorityDirty = !areStringArraysEqual(colorPriority, savedColorPriority);
+  const profileDirty = characterDirty || bioDirty || colorPriorityDirty;
   const graphicsDirty =
+    tutorialsEnabled !== savedGraphicsSelection.tutorialsEnabled ||
     selectedMenuBackground !== savedGraphicsSelection.selectedMenuBackground ||
     selectedGameBackground !== savedGraphicsSelection.selectedGameBackground ||
     selectedPrimaryColor !== savedGraphicsSelection.selectedPrimaryColor ||
@@ -224,9 +394,7 @@ const SettingsPage = () => {
     String(confirmPasswordValue ?? "").trim().length > 0,
   );
   const hasUnsavedChanges =
-    characterDirty ||
-    bioDirty ||
-    colorPriorityDirty ||
+    profileDirty ||
     graphicsDirty ||
     soundsDirty ||
     passwordDirty;
@@ -261,100 +429,157 @@ const SettingsPage = () => {
     };
   }, [hasUnsavedChanges]);
 
-  const handleBioSave = async () => {
-    const uid = userId.trim();
-    if (!uid || savingBio) {
-      return;
-    }
-
-    const normalizedDraft = bioDraft.trim();
-    if (normalizedDraft.length > BIO_MAX_LENGTH) {
-      message.error(`Bio can be max ${BIO_MAX_LENGTH} characters.`);
-      return;
-    }
-
-    const authToken = token.trim();
-    const nextBio = normalizedDraft.length > 0 ? normalizedDraft : "";
-
-    setSavingBio(true);
-    try {
-      if (authToken) {
-        await apiService.putWithAuth(`/users/${encodeURIComponent(uid)}`, { bio: nextBio }, authToken);
-      } else {
-        await apiService.put(`/users/${encodeURIComponent(uid)}`, { bio: nextBio });
-      }
-      setBioValue(nextBio);
-      setBioDraft(nextBio);
-      setEditingBio(false);
-      message.success("Bio saved.");
-    } catch (error) {
-      if (error instanceof Error) {
-        alert(`Could not save bio:\n${error.message}`);
-      }
-    } finally {
-      setSavingBio(false);
-    }
-  };
-
   const handleBioCancel = () => {
     setBioDraft(bioValue);
     setEditingBio(false);
   };
 
+  const updateUserSettings = useCallback(async (payload: Record<string, unknown>) => {
+    const uid = userId.trim();
+    if (!uid) {
+      router.replace("/login");
+      return;
+    }
+
+    const authToken = token.trim();
+    if (authToken) {
+      await apiService.putWithAuth<void>(`/users/${encodeURIComponent(uid)}`, payload, authToken);
+      return;
+    }
+    await apiService.put<void>(`/users/${encodeURIComponent(uid)}`, payload);
+  }, [apiService, router, token, userId]);
+
   const handleColorPriorityChange = (index: number, nextColor: string) => {
     setColorPriority((prev) => {
-      if (prev.some((picked, pickedIndex) => pickedIndex !== index && picked === nextColor)) {
-        return prev;
-      }
       const next = [...prev];
-      next[index] = nextColor;
+      const swapIndex = next.findIndex((picked, pickedIndex) => pickedIndex !== index && picked === nextColor);
+      if (swapIndex >= 0) {
+        const current = next[index];
+        next[index] = nextColor;
+        next[swapIndex] = current;
+      } else {
+        next[index] = nextColor;
+      }
       return next;
     });
   };
 
-  const handleColorPrioritySave = async () => {
-    if (new Set(colorPriority).size !== PRIORITY_COLOR_OPTIONS.length) {
-      message.error("Each preferred color must be unique.");
+  const handleProfileSave = async () => {
+    if (savingProfile) {
       return;
     }
-    setSavingPriority(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
-    setSavedColorPriority([...colorPriority]);
-    setSavingPriority(false);
-    message.success("Preferred color priorities saved.");
-  };
 
-  const handleCharacterSave = async () => {
-    setSavingCharacter(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
-    setSavedCharacter(selectedCharacter);
-    setSavingCharacter(false);
-    message.success("Profile picture selection saved.");
+    const nextBio = bioDraft.trim();
+    if (nextBio.length > BIO_MAX_LENGTH) {
+      message.error(`Bio can be max ${BIO_MAX_LENGTH} characters.`);
+      return;
+    }
+
+    if (hasDuplicatePriorityColors(colorPriority)) {
+      message.error("Each selected preferred color must be unique.");
+      return;
+    }
+
+    setSavingProfile(true);
+    try {
+      await updateUserSettings({
+        profileCharacterId: selectedCharacter,
+        preferredColorPriority: colorPriority,
+        bio: nextBio,
+      });
+      setSavedCharacter(selectedCharacter);
+      setSavedColorPriority([...colorPriority]);
+      setBioValue(nextBio);
+      setBioDraft(nextBio);
+      setEditingBio(false);
+      message.success("Profile settings saved.");
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not save profile settings:\n${error.message}`);
+      }
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   const handleGraphicsSave = async () => {
+    if (savingGraphics) {
+      return;
+    }
     setSavingGraphics(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
-    setSavedGraphicsSelection({
-      selectedMenuBackground,
-      selectedGameBackground,
-      selectedPrimaryColor,
-      selectedTextColor,
-    });
-    setSavingGraphics(false);
-    message.success("Graphics settings saved.");
+    try {
+      await updateUserSettings({
+        tutorialsEnabled,
+        menuBackgroundId: selectedMenuBackground,
+        gameBackgroundId: selectedGameBackground,
+        primaryColorId: selectedPrimaryColor,
+        textColorId: selectedTextColor,
+      });
+      setSavedGraphicsSelection({
+        tutorialsEnabled,
+        selectedMenuBackground,
+        selectedGameBackground,
+        selectedPrimaryColor,
+        selectedTextColor,
+      });
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(MENU_BACKGROUND_STORAGE_KEY, selectedMenuBackground);
+        window.localStorage.setItem(GAME_BACKGROUND_STORAGE_KEY, selectedGameBackground);
+      }
+      setStoredPrimaryColorId(selectedPrimaryColor);
+      setStoredTextColorId(selectedTextColor);
+      if (typeof document !== "undefined") {
+        document.documentElement.style.setProperty(
+          "--cabo-menu-background-image",
+          backgroundFileToCssUrl(selectedMenuBackground),
+        );
+        document.documentElement.style.setProperty(
+          "--cabo-game-background-image",
+          backgroundFileToCssUrl(selectedGameBackground),
+        );
+      }
+      message.success("Graphics settings saved.");
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not save graphics settings:\n${error.message}`);
+      }
+    } finally {
+      setSavingGraphics(false);
+    }
   };
 
+  const isDarkTextTheme = normalizeTextColorId(selectedTextColor) === "dark";
+  const selectSurfaceClass = isDarkTextTheme
+    ? "settings-select-surface-light"
+    : "settings-select-surface-dark";
+  const selectDropdownClass = isDarkTextTheme
+    ? "settings-select-dropdown-light"
+    : "settings-select-dropdown-dark";
+
   const handleSoundsSave = async () => {
+    if (savingSounds) {
+      return;
+    }
     setSavingSounds(true);
-    await new Promise((resolve) => window.setTimeout(resolve, 180));
-    setSavedSoundsSelection({
-      musicVolume,
-      soundEffectsVolume,
-      musicBlacklist: [...normalizedMusicBlacklist],
-    });
-    setSavingSounds(false);
-    message.success("Sound settings saved.");
+    try {
+      await updateUserSettings({
+        musicVolume,
+        soundEffectsVolume,
+        musicBlacklist: normalizedMusicBlacklist,
+      });
+      setSavedSoundsSelection({
+        musicVolume,
+        soundEffectsVolume,
+        musicBlacklist: [...normalizedMusicBlacklist],
+      });
+      message.success("Sound settings saved.");
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not save sound settings:\n${error.message}`);
+      }
+    } finally {
+      setSavingSounds(false);
+    }
   };
 
   const handlePasswordSave = async () => {
@@ -422,28 +647,19 @@ const SettingsPage = () => {
               <div className="settings-option-block">
                 <div className="settings-inline-header">
                   <span className="settings-option-title">Change Profile Picture</span>
-                  <Button
-                    type="default"
-                    className="settings-inline-action-btn"
-                    loading={savingCharacter}
-                    disabled={!characterDirty}
-                    onClick={() => void handleCharacterSave()}
-                  >
-                    Save
-                  </Button>
                 </div>
                 <div className="settings-character-scroll" role="listbox" aria-label="Choose profile character">
-                  {CHARACTER_OPTIONS.map((character) => (
+                  {USER_PROFILE_CHARACTER_OPTIONS.map((character) => (
                     <button
                       key={character.id}
                       type="button"
                       className={`settings-character-tile${selectedCharacter === character.id ? " settings-character-tile-selected" : ""}`}
                       onClick={() => setSelectedCharacter(character.id)}
                       aria-label={character.label}
-                      aria-selected={selectedCharacter === character.id}
                     >
-                      <Image
-                        src={character.src}
+                      <CharacterAvatar
+                        characterId={character.id}
+                        primaryColorId={colorPriority[0]}
                         alt={character.label}
                         fill
                         sizes="84px"
@@ -461,29 +677,19 @@ const SettingsPage = () => {
                   </span>
                   <span className="settings-inline-actions">
                     {editingBio ? (
-                      <>
-                        <Button
-                          type="primary"
-                          className="settings-inline-action-btn"
-                          loading={savingBio}
-                          disabled={!bioDirty}
-                          onClick={() => void handleBioSave()}
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          type="default"
-                          className="settings-inline-action-btn"
-                          disabled={savingBio}
-                          onClick={handleBioCancel}
-                        >
-                          Cancel
-                        </Button>
-                      </>
+                      <Button
+                        type="default"
+                        className="settings-inline-action-btn"
+                        disabled={savingProfile}
+                        onClick={handleBioCancel}
+                      >
+                        Cancel
+                      </Button>
                     ) : (
                       <Button
                         type="default"
                         className="settings-inline-action-btn"
+                        disabled={savingProfile}
                         onClick={() => setEditingBio(true)}
                       >
                         Edit
@@ -493,6 +699,7 @@ const SettingsPage = () => {
                 </div>
                 {editingBio ? (
                   <Input.TextArea
+                    className={`settings-bio-input ${isDarkTextTheme ? "settings-input-surface-light" : "settings-input-surface-dark"}`}
                     rows={4}
                     value={bioDraft}
                     onChange={(event) => setBioDraft(event.target.value)}
@@ -509,22 +716,20 @@ const SettingsPage = () => {
 
               <div className="settings-option-block">
                 <div className="settings-inline-header">
-                  <span className="settings-option-title">Preferred Color Priority</span>
-                  <Button
-                    type="default"
-                    className="settings-inline-action-btn"
-                    loading={savingPriority}
-                    disabled={!colorPriorityDirty}
-                    onClick={() => void handleColorPrioritySave()}
-                  >
-                    Save
-                  </Button>
+                  <span className="settings-option-title">Preferred Character Colors</span>
                 </div>
+                <p className="settings-preference-note">
+                  Your 1st choice sets your character wearable color (scarf, hoodie, etc.), and in lobbies, the color
+                  will fall back to your next choices if a color is already taken.
+                </p>
                 <div className="settings-priority-grid">
-                  {PRIORITY_LABELS.map((priorityLabel, index) => (
+                  {USER_PRIORITY_LABELS.map((priorityLabel, index) => (
                     <div key={priorityLabel} className="settings-priority-col">
                       <span className="settings-priority-label">{priorityLabel} choice</span>
                       <Select
+                        className={`settings-priority-select ${selectSurfaceClass}`}
+                        popupClassName={`settings-priority-dropdown ${selectDropdownClass}`}
+                        classNames={{ popup: { root: `settings-priority-dropdown ${selectDropdownClass}` } }}
                         value={colorPriority[index]}
                         options={colorPriorityOptionsByIndex[index]}
                         onChange={(value) => handleColorPriorityChange(index, value)}
@@ -532,6 +737,17 @@ const SettingsPage = () => {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              <div className="settings-card-actions">
+                <Button
+                  type="primary"
+                  loading={savingProfile}
+                  disabled={!profileDirty}
+                  onClick={() => void handleProfileSave()}
+                >
+                  Save Profile
+                </Button>
               </div>
             </div>
           </Card>
@@ -542,16 +758,28 @@ const SettingsPage = () => {
           >
             <div className="settings-panel">
               <div className="settings-option-block">
+                <div className="settings-toggle-row">
+                  <span className="settings-option-title">Tutorials</span>
+                  <Switch
+                    className="lobby-private-switch"
+                    checked={tutorialsEnabled}
+                    onChange={setTutorialsEnabled}
+                    checkedChildren="Yes"
+                    unCheckedChildren="No"
+                  />
+                </div>
+              </div>
+
+              <div className="settings-option-block">
                 <div className="settings-option-title">Menu Background</div>
                 <div className="settings-background-scroll" role="listbox" aria-label="Select menu background">
-                  {MENU_BACKGROUND_OPTIONS.map((backgroundOption) => (
+                  {backgroundOptions.map((backgroundOption) => (
                     <button
                       key={backgroundOption.id}
                       type="button"
                       className={`settings-background-tile${selectedMenuBackground === backgroundOption.id ? " settings-background-tile-selected" : ""}`}
                       onClick={() => setSelectedMenuBackground(backgroundOption.id)}
                       aria-label={backgroundOption.label}
-                      aria-selected={selectedMenuBackground === backgroundOption.id}
                     >
                       <Image
                         src={backgroundOption.src}
@@ -568,14 +796,13 @@ const SettingsPage = () => {
               <div className="settings-option-block">
                 <div className="settings-option-title">Game Background</div>
                 <div className="settings-background-scroll" role="listbox" aria-label="Select game background">
-                  {GAME_BACKGROUND_OPTIONS.map((backgroundOption) => (
+                  {backgroundOptions.map((backgroundOption) => (
                     <button
                       key={backgroundOption.id}
                       type="button"
                       className={`settings-background-tile${selectedGameBackground === backgroundOption.id ? " settings-background-tile-selected" : ""}`}
                       onClick={() => setSelectedGameBackground(backgroundOption.id)}
                       aria-label={backgroundOption.label}
-                      aria-selected={selectedGameBackground === backgroundOption.id}
                     >
                       <Image
                         src={backgroundOption.src}
@@ -592,7 +819,7 @@ const SettingsPage = () => {
               <div className="settings-option-block">
                 <div className="settings-option-title">Primary Colors</div>
                 <div className="settings-color-chip-row" role="listbox" aria-label="Select primary color">
-                  {PRIMARY_COLOR_OPTIONS.map((colorOption) => (
+                  {USER_PRIMARY_COLOR_OPTIONS.map((colorOption) => (
                     <button
                       key={colorOption.id}
                       type="button"
@@ -600,7 +827,6 @@ const SettingsPage = () => {
                       style={{ ["--settings-chip-color" as string]: colorOption.hex }}
                       onClick={() => setSelectedPrimaryColor(colorOption.id)}
                       aria-label={colorOption.label}
-                      aria-selected={selectedPrimaryColor === colorOption.id}
                     />
                   ))}
                 </div>
@@ -609,7 +835,7 @@ const SettingsPage = () => {
               <div className="settings-option-block">
                 <div className="settings-option-title">Text Colors</div>
                 <div className="settings-color-chip-row" role="listbox" aria-label="Select text color">
-                  {TEXT_COLOR_OPTIONS.map((colorOption) => (
+                  {USER_TEXT_COLOR_OPTIONS.map((colorOption) => (
                     <button
                       key={colorOption.id}
                       type="button"
@@ -617,7 +843,6 @@ const SettingsPage = () => {
                       style={{ ["--settings-chip-color" as string]: colorOption.hex }}
                       onClick={() => setSelectedTextColor(colorOption.id)}
                       aria-label={colorOption.label}
-                      aria-selected={selectedTextColor === colorOption.id}
                     />
                   ))}
                 </div>
@@ -680,10 +905,12 @@ const SettingsPage = () => {
               <div className="settings-option-block">
                 <div className="settings-option-title">Music Blacklist</div>
                 <Select
-                  className="settings-music-blacklist-select"
+                  className={`settings-music-blacklist-select ${selectSurfaceClass}`}
+                  popupClassName={`settings-music-blacklist-dropdown ${selectDropdownClass}`}
+                  classNames={{ popup: { root: `settings-music-blacklist-dropdown ${selectDropdownClass}` } }}
                   mode="tags"
                   value={musicBlacklist}
-                  onChange={(values) => setMusicBlacklist(values.map((value) => String(value).trim()).filter((value) => value.length > 0))}
+                  onChange={(values) => setMusicBlacklist(normalizeMusicBlacklist(values))}
                   placeholder="Add tags like music_01"
                   tokenSeparators={[",", " "]}
                 />

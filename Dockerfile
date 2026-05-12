@@ -12,7 +12,7 @@ RUN npm ci --loglevel=error
 COPY . .
 # Build the app
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN npm run prebuild && node --no-opt --max-old-space-size=4096 ./node_modules/next/dist/bin/next build
 
 # Use small production image
 FROM node:20-alpine

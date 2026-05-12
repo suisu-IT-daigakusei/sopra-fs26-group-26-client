@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
+import CharacterAvatar from "@/components/CharacterAvatar";
 import { useApi } from "@/hooks/useApi";
+import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
 import { Button } from "antd";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import CardComponent from "./components/CardComponent";
@@ -15,6 +16,7 @@ import type { User } from "@/types/user";
 import { useRouter } from "next/navigation";
 import Scores from "./components/Scores";
 import FinalScoreScreen from "./components/FinalScoreScreen";
+import { getCharacterWavingFrameMax, normalizeCharacterId, normalizePrimaryColorId, normalizeVolume } from "@/utils/userSettings";
 
 interface Card {
     value: number;
@@ -86,6 +88,17 @@ type GameRuntimeConfigResponse = {
     caboRevealSeconds?: number | string | null;
     afkTimeoutSeconds?: number | string | null;
     rematchDecisionSeconds?: number | string | null;
+};
+
+type WaitingLobbyPlayerRow = {
+    userId?: number | string | null;
+    username?: string | null;
+    profileCharacterId?: string | null;
+    characterColorId?: string | null;
+};
+
+type WaitingLobbySnapshot = {
+    players?: WaitingLobbyPlayerRow[] | null;
 };
 
 type ActiveGameStatusSnapshot = {
@@ -1018,6 +1031,7 @@ const Game = () => {
       const DEFAULT_ABILITY_REVEAL_SECONDS = 5;
       const DEFAULT_ABILITY_SWAP_SECONDS = 10;
       const DEFAULT_ROUND_REVEAL_SECONDS = 30;
+      const DEFAULT_SOUND_EFFECTS_VOLUME = 70;
       const [rematchDecisionDuration, setRematchDecisionDuration] = useState<number>(30);
       const [caboRevealDurationSeconds, setCaboRevealDurationSeconds] =
           useState<number>(DEFAULT_ROUND_REVEAL_SECONDS);
@@ -1028,6 +1042,7 @@ const Game = () => {
           useState<number>(DEFAULT_ABILITY_REVEAL_SECONDS);
       const [abilitySwapDurationSeconds, setAbilitySwapDurationSeconds] =
           useState<number>(DEFAULT_ABILITY_SWAP_SECONDS);
+      const [soundEffectsVolume, setSoundEffectsVolume] = useState<number>(DEFAULT_SOUND_EFFECTS_VOLUME);
       const [isAbilityRevealWindow, setIsAbilityRevealWindow] = useState<boolean>(false);
       const [isCaboCalledGlobal, setIsCaboCalledGlobal] = useState<boolean>(false);
       const [isCaboForcedByTimeoutGlobal, setIsCaboForcedByTimeoutGlobal] = useState<boolean>(false);
@@ -1074,6 +1089,8 @@ const Game = () => {
       const [orderedPlayerIds, setOrderedPlayerIds] = useState<number[]>([]);
       const [playerCardsById, setPlayerCardsById] = useState<Record<number, SeatCardView[]>>({});
       const [playerNamesById, setPlayerNamesById] = useState<Record<number, string>>({});
+      const [playerCharacterById, setPlayerCharacterById] = useState<Record<number, string>>({});
+      const [playerPrimaryColorById, setPlayerPrimaryColorById] = useState<Record<number, string>>({});
       // Final scores state (declare early so handlers can use them safely)
       const [finalScores, setFinalScores] = useState<Array<{
           userId: number;
@@ -1100,11 +1117,155 @@ const Game = () => {
       const caboRevealDeadlineMsRef = useRef<number | null>(null);
       const rematchDeadlineMsRef = useRef<number | null>(null);
       const consecutiveNotMyTurnPollsRef = useRef<number>(0);
+      const caboBellAudioRef = useRef<HTMLAudioElement | null>(null);
+      const previousIsCaboCalledRef = useRef<boolean>(false);
 
       const parsedSelfUserId = Number(userId);
       const selfUserId = userId.trim() !== "" && Number.isFinite(parsedSelfUserId)
           ? parsedSelfUserId
           : null;
+
+      useEffect(() => {
+          const authToken = token.trim();
+          const uid = userId.trim();
+          if (!authToken || !uid) {
+              setSoundEffectsVolume(DEFAULT_SOUND_EFFECTS_VOLUME);
+              return;
+          }
+
+          let active = true;
+          const loadSoundEffectsVolume = async () => {
+              try {
+                  const fetchedUser = await apiService.getWithAuth<User>(
+                      `/users/${encodeURIComponent(uid)}`,
+                      authToken,
+                  );
+                  if (!active) {
+                      return;
+                  }
+                  setSoundEffectsVolume(
+                      normalizeVolume(fetchedUser?.soundEffectsVolume, DEFAULT_SOUND_EFFECTS_VOLUME),
+                  );
+              } catch {
+                  if (active) {
+                      setSoundEffectsVolume(DEFAULT_SOUND_EFFECTS_VOLUME);
+                  }
+              }
+          };
+
+          void loadSoundEffectsVolume();
+          return () => {
+              active = false;
+          };
+      }, [apiService, token, userId]);
+
+      useEffect(() => {
+          const authToken = token.trim();
+          const sessionCode = lobbySessionId.trim();
+          if (!authToken || !sessionCode) {
+              return;
+          }
+
+          let active = true;
+          const loadLobbyCharacterAssignments = async () => {
+              try {
+                  const waitingSnapshot = await apiService.getWithAuth<WaitingLobbySnapshot>(
+                      `/lobbies/waiting/${encodeURIComponent(sessionCode)}`,
+                      authToken,
+                  );
+                  if (!active) {
+                      return;
+                  }
+                  const rows = Array.isArray(waitingSnapshot?.players) ? waitingSnapshot.players : [];
+                  if (rows.length === 0) {
+                      return;
+                  }
+
+                  setPlayerNamesById((previous) => {
+                      const next = { ...previous };
+                      for (const row of rows) {
+                          const parsedUserId = Number(row?.userId);
+                          if (!Number.isFinite(parsedUserId)) {
+                              continue;
+                          }
+                          const username = String(row?.username ?? "").trim();
+                          if (!isPlaceholderPlayerName(username)) {
+                              next[parsedUserId] = username;
+                          }
+                      }
+                      return next;
+                  });
+
+                  setPlayerCharacterById((previous) => {
+                      const next = { ...previous };
+                      for (const row of rows) {
+                          const parsedUserId = Number(row?.userId);
+                          if (!Number.isFinite(parsedUserId)) {
+                              continue;
+                          }
+                          next[parsedUserId] = normalizeCharacterId(row?.profileCharacterId);
+                      }
+                      return next;
+                  });
+
+                  setPlayerPrimaryColorById((previous) => {
+                      const next = { ...previous };
+                      for (const row of rows) {
+                          const parsedUserId = Number(row?.userId);
+                          if (!Number.isFinite(parsedUserId)) {
+                              continue;
+                          }
+                          const rawCharacterColorId = String(row?.characterColorId ?? "").trim();
+                          if (!rawCharacterColorId) {
+                              continue;
+                          }
+                          next[parsedUserId] = normalizePrimaryColorId(rawCharacterColorId);
+                      }
+                      return next;
+                  });
+              } catch {
+                  // fallback to user profile lookup later if waiting snapshot is unavailable
+              }
+          };
+
+          void loadLobbyCharacterAssignments();
+          return () => {
+              active = false;
+          };
+      }, [apiService, lobbySessionId, token]);
+
+      useEffect(() => {
+          if (typeof window === "undefined") {
+              return;
+          }
+          const bell = new Audio("/cabo_bell.mp3");
+          bell.preload = "auto";
+          caboBellAudioRef.current = bell;
+          return () => {
+              bell.pause();
+              caboBellAudioRef.current = null;
+          };
+      }, []);
+
+      useEffect(() => {
+          const wasCalled = previousIsCaboCalledRef.current;
+          const isCalled = isCaboCalledGlobal === true;
+          previousIsCaboCalledRef.current = isCalled;
+          if (!isCalled || wasCalled) {
+              return;
+          }
+
+          const bell = caboBellAudioRef.current;
+          if (!bell) {
+              return;
+          }
+
+          bell.volume = Math.max(0, Math.min(1, soundEffectsVolume / 100));
+          bell.currentTime = 0;
+          void bell.play().catch(() => {
+              // ignore autoplay restrictions
+          });
+      }, [isCaboCalledGlobal, soundEffectsVolume]);
 
       useEffect(() => {
           if (gameStatus !== "" || gameStatusSnapshotForCurrentGame === "") {
@@ -1836,6 +1997,7 @@ const Game = () => {
           if (!authToken) {
               return;
           }
+          const canUseProfileColorFallback = !lobbySessionId.trim();
 
           const candidateIds = [...tablePlayerIds];
           finalScores.forEach((entry) => {
@@ -1844,7 +2006,12 @@ const Game = () => {
               }
           });
 
-          const missingIds = candidateIds.filter((id) => isPlaceholderPlayerName(playerNamesById[id]));
+          const missingIds = candidateIds.filter(
+              (id) =>
+                  isPlaceholderPlayerName(playerNamesById[id]) ||
+                  !playerCharacterById[id] ||
+                  (canUseProfileColorFallback && !playerPrimaryColorById[id])
+          );
           if (missingIds.length === 0) {
               return;
           }
@@ -1860,9 +2027,11 @@ const Game = () => {
                       const displayName = String(
                           fetchedUser?.username ?? fetchedUser?.name ?? ""
                       ).trim();
-                      return [id, displayName] as const;
+                      const profileCharacterId = normalizeCharacterId(fetchedUser?.profileCharacterId);
+                      const primaryColorId = normalizePrimaryColorId(fetchedUser?.primaryColorId);
+                      return [id, displayName, profileCharacterId, primaryColorId] as const;
                   } catch {
-                      return [id, ""] as const;
+                      return [id, "", "", ""] as const;
                   }
               })
           ).then((entries) => {
@@ -1878,12 +2047,33 @@ const Game = () => {
                   }
                   return next;
               });
+              setPlayerCharacterById((previous) => {
+                  const next = { ...previous };
+                  for (const [id, , characterId] of entries) {
+                      if (characterId) {
+                          next[id] = characterId;
+                      }
+                  }
+                  return next;
+              });
+              setPlayerPrimaryColorById((previous) => {
+                  if (!canUseProfileColorFallback) {
+                      return previous;
+                  }
+                  const next = { ...previous };
+                  for (const [id, , , primaryColorId] of entries) {
+                      if (primaryColorId) {
+                          next[id] = primaryColorId;
+                      }
+                  }
+                  return next;
+              });
           });
 
           return () => {
               active = false;
           };
-      }, [apiService, finalScores, playerNamesById, tablePlayerIds, token]);
+      }, [apiService, finalScores, lobbySessionId, playerCharacterById, playerNamesById, playerPrimaryColorById, tablePlayerIds, token]);
 
       const refreshSessionScoresFromSessionState = useCallback(async () => {
           const authToken = token.trim();
@@ -2263,6 +2453,10 @@ const Game = () => {
           !isPostRoundPhase &&
           gameStatus !== "round_ended" &&
           afkRemainingSeconds <= afkWarningLeadSeconds;
+      useAttentionTitleBlink({
+          enabled: showAfkWarning,
+          alertTitle: "AFK WARNING - Return to game",
+      });
       const toDisplayedSeconds = (seconds: number): number =>
           seconds > 0 ? Math.max(0, seconds - 1) : 0;
       const displayedTurnTimeLeft = toDisplayedSeconds(turnTimeLeft);
@@ -2880,6 +3074,11 @@ const launchFlyingCardAnimation = (
         return;
     }
 
+    const fromCenterX = fromRect.left + (fromRect.width / 2);
+    const fromCenterY = fromRect.top + (fromRect.height / 2);
+    const toCenterX = toRect.left + (toRect.width / 2);
+    const toCenterY = toRect.top + (toRect.height / 2);
+
     const animationId = flyingCardIdRef.current + 1;
     flyingCardIdRef.current = animationId;
 
@@ -2889,10 +3088,11 @@ const launchFlyingCardAnimation = (
         id: animationId,
         hidden: card.hidden,
         value: card.value,
-        startX: fromRect.left,
-        startY: fromRect.top,
-        deltaX: toRect.left - fromRect.left,
-        deltaY: toRect.top - fromRect.top,
+        // Anchor the flying card to source center, then move center-to-center.
+        startX: fromCenterX - (fromRect.width / 2),
+        startY: fromCenterY - (fromRect.height / 2),
+        deltaX: toCenterX - fromCenterX,
+        deltaY: toCenterY - fromCenterY,
         width: fromRect.width,
         height: fromRect.height,
         },
@@ -3386,7 +3586,6 @@ const introPhasePlayers = useMemo(() => {
 
 const INTRO_TITLE_DURATION_MS = 2000;
 const INTRO_PLAYER_REVEAL_INTERVAL_MS = 2000;
-const INTRO_WAVE_FRAME_COUNT = 5;
 const INTRO_WAVE_FRAME_DURATION_MS = 200;
 
 const visibleIntroPlayersCount = useMemo(() => {
@@ -3524,7 +3723,7 @@ const centerTurnActionLabel = useMemo(() => {
 
 if (isIntroPhase) {
     return (
-        <div className="cabo-background">
+        <div className="cabo-background cabo-background-game">
             <div className="game-intro-screen" role="status" aria-live="polite">
                 <h1 className="game-intro-title">
                     <span className="game-intro-title-main">WELCOME TO CABO</span>
@@ -3534,15 +3733,19 @@ if (isIntroPhase) {
                     {visibleIntroPlayers.map((player, index) => {
                         const revealStartedAtMs = INTRO_TITLE_DURATION_MS + (index * INTRO_PLAYER_REVEAL_INTERVAL_MS);
                         const elapsedSinceRevealMs = Math.max(0, introElapsedMs - revealStartedAtMs);
+                        const waveFrameMax = getCharacterWavingFrameMax(playerCharacterById[player.userId]);
                         const waveFrame = Math.min(
-                            INTRO_WAVE_FRAME_COUNT,
+                            waveFrameMax,
                             1 + Math.floor(elapsedSinceRevealMs / INTRO_WAVE_FRAME_DURATION_MS),
                         );
                         return (
                             <div key={player.userId} className="game-intro-player-card">
                                 <div className="game-intro-player-avatar" aria-hidden="true">
-                                    <Image
-                                        src={`/char01_waving_${waveFrame}.png`}
+                                    <CharacterAvatar
+                                        characterId={playerCharacterById[player.userId]}
+                                        primaryColorId={playerPrimaryColorById[player.userId]}
+                                        variant="waving"
+                                        frame={waveFrame}
                                         alt=""
                                         width={160}
                                         height={160}
@@ -3576,7 +3779,7 @@ const playerListRows = tablePlayerIds.map((id) => {
       });
 
       return (
-          <div className="cabo-background">
+          <div className="cabo-background cabo-background-game">
               <div className="game-overlay">
                   <div className="game-player-list" aria-label="Players in game">
                       {playerListRows.map((player) => (

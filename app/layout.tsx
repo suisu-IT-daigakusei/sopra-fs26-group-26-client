@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { App as AntdApp, ConfigProvider, theme } from "antd";
 import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { Suspense } from "react";
 import CaboInviteNotifications from "./CaboInviteNotifications";
@@ -9,6 +8,8 @@ import "./styles/globals.css";
 import DisconnectHandler from "./components/DisconnectHandler";
 import PageTransitionLoader from "./components/PageTransitionLoader";
 import AuthRouteLoadingOverlay from "./components/AuthRouteLoadingOverlay";
+import BackgroundPreferenceSync from "./components/BackgroundPreferenceSync";
+import ClientThemeProvider from "./components/ClientThemeProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,42 +34,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        <ConfigProvider
-          theme={{
-            algorithm: theme.defaultAlgorithm,
-            token: {
-              // general theme options are set in token, meaning all primary elements (button, menu, ...) will have this color
-              colorPrimary: "#22426b", // selected input field boarder will have this color as well
-              borderRadius: 8,
-              colorText: "#fff",
-              fontSize: 16,
-
-              // Alias Token
-              colorBgContainer: "#16181D",
-            },
-            // if a component type needs special styling, setting here will override default options set in token
-            components: {
-              Button: {
-                colorPrimary: "#75bd9d", // this will color all buttons in #75bd9d, overriding the default primaryColor #22426b set in token line 35
-                algorithm: true, // enable algorithm (redundant with line 33 but here for demo purposes)
-                controlHeight: 38,
-              },
-              Input: {
-                colorBorder: "gray", // color boarder selected is not overridden but instead is set by primary color in line 35
-                colorTextPlaceholder: "#888888",
-                algorithm: false, // disable algorithm (line 32)
-              },
-              Form: {
-                labelColor: "#fff",
-                algorithm: theme.defaultAlgorithm, // specify a specifc algorithm instead of true/false
-              },
-              Card: {},
-            },
-          }}
-        >
-          <AntdRegistry>
-            <AntdApp>
+        <AntdRegistry>
+          <ClientThemeProvider>
               <DisconnectHandler />
+              <BackgroundPreferenceSync />
               <AuthRouteLoadingOverlay />
               <Suspense fallback={null}>
                 <PageTransitionLoader />
@@ -76,9 +45,8 @@ export default function RootLayout({
               <GameReconnectPrompt />
               <CaboInviteNotifications />
               {children}
-            </AntdApp>
-          </AntdRegistry>
-        </ConfigProvider>
+          </ClientThemeProvider>
+        </AntdRegistry>
       </body>
     </html>
   );

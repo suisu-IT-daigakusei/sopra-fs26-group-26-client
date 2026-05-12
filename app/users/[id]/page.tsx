@@ -1,13 +1,14 @@
 "use client"; // all users, even oneself, uses this page now, reworked as a result
 
 import React, { useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { ApplicationError } from "@/types/error";
 import { User } from "@/types/user";
 import { toPresenceKey, toPresenceLabel } from "@/utils/presence";
+import { resolveCharacterColorId } from "@/utils/userSettings";
+import CharacterAvatar from "@/components/CharacterAvatar";
 import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
@@ -828,8 +829,9 @@ const UserProfilePage: React.FC = () => {
               <div className="profile-grid">
                 <div className="profile-hero-row">
                   <div className="profile-hero-avatar-wrap" aria-hidden="true">
-                    <Image
-                      src="/char01_profile.png"
+                    <CharacterAvatar
+                      characterId={user?.profileCharacterId}
+                      primaryColorId={resolveCharacterColorId(user?.preferredColorPriority, user?.primaryColorId)}
                       alt=""
                       width={156}
                       height={156}

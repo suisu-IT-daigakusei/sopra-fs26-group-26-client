@@ -36,6 +36,19 @@ function parseOnlineUsersJson(body: string): User[] {
       games: (o.games as number) ?? null,
       averageScorePerRound: (o.averageScorePerRound as number) ?? null,
       overallRank: (o.overallRank as number) ?? null,
+      profileCharacterId: (o.profileCharacterId as string) ?? null,
+      preferredColorPriority: Array.isArray(o.preferredColorPriority)
+        ? o.preferredColorPriority.map((entry) => String(entry))
+        : null,
+      menuBackgroundId: (o.menuBackgroundId as string) ?? null,
+      gameBackgroundId: (o.gameBackgroundId as string) ?? null,
+      primaryColorId: (o.primaryColorId as string) ?? null,
+      textColorId: (o.textColorId as string) ?? null,
+      musicVolume: (o.musicVolume as number) ?? null,
+      soundEffectsVolume: (o.soundEffectsVolume as number) ?? null,
+      musicBlacklist: Array.isArray(o.musicBlacklist)
+        ? o.musicBlacklist.map((entry) => String(entry))
+        : null,
     };
   });
 }

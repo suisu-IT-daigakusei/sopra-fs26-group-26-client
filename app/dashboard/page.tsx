@@ -4,13 +4,14 @@
 // beinhaltet overview des users und seiner daten, möglichkeit zum logout, aber auch inspektion der anderen user sowie auch password change button  (s3)
 
 import React, { Suspense, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
+import CharacterAvatar from "@/components/CharacterAvatar";
 import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
+import { resolveCharacterColorId } from "@/utils/userSettings";
 import { Button, Card } from "antd";
 
 // Simple 3 variant dynamic greetings on Dashboard
@@ -216,8 +217,9 @@ function DashboardContent() {
           >
             <div className="dashboard-profile-hero">
               <div className="dashboard-profile-avatar-wrap" aria-hidden="true">
-                <Image
-                  src="/char01_profile.png"
+                <CharacterAvatar
+                  characterId={user?.profileCharacterId}
+                  primaryColorId={resolveCharacterColorId(user?.preferredColorPriority, user?.primaryColorId)}
                   alt=""
                   width={112}
                   height={112}
@@ -276,6 +278,9 @@ function DashboardContent() {
             <div className="dashboard-button-stack">
               <Button type="primary" onClick={() => router.push("/settings")}>
                 Settings
+              </Button>
+              <Button type="primary" onClick={() => router.push("/credits")}>
+                Credits
               </Button>
               <Button type="primary" className="dashboard-logout-btn" onClick={() => void handleLogout()}>
                 Logout

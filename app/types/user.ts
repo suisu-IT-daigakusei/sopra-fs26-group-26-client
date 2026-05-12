@@ -15,5 +15,15 @@ export interface User {
   games?: number | null;
   averageScorePerRound: number | null;
   overallRank: number | null;
+  profileCharacterId?: string | null;
+  preferredColorPriority?: string[] | null;
+  menuBackgroundId?: string | null;
+  gameBackgroundId?: string | null;
+  primaryColorId?: string | null;
+  textColorId?: string | null;
+  tutorialsEnabled?: boolean | null;
+  musicVolume?: number | null;
+  soundEffectsVolume?: number | null;
+  musicBlacklist?: string[] | null;
 }
  
