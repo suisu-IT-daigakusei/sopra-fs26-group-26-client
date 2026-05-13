@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -13,11 +12,6 @@ type BuildInfo = {
   commitId: string;
   date: string;
   time: string;
-};
-
-type BuildInfoResponse = {
-  client: BuildInfo;
-  server: BuildInfo;
 };
 
 function toUnknownBuildInfo(): BuildInfo {
@@ -70,44 +64,53 @@ async function readBuildInfo(repoPath: string): Promise<BuildInfo> {
   }
 }
 
-function toBuildInfo(value: unknown): BuildInfo {
-  if (!value || typeof value !== "object") {
-    return toUnknownBuildInfo();
-  }
-  const record = value as Record<string, unknown>;
-  return {
-    commitId: String(record.commitId ?? "").trim() || "unknown",
-    date: String(record.date ?? "").trim() || "--------",
-    time: String(record.time ?? "").trim() || "--:--",
-  };
-}
-
 function isKnownBuildInfo(buildInfo: BuildInfo): boolean {
   return buildInfo.commitId !== "unknown";
 }
 
-async function readBuildInfoFromFile(): Promise<BuildInfoResponse | null> {
-  const filePath = path.join(process.cwd(), "public", "build-info.json");
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      client: toBuildInfo(parsed.client),
-      server: toBuildInfo(parsed.server),
-    };
-  } catch {
-    return null;
+function readBuildInfoFromEnv(commitIdEnv: string, timestampEnv: string): BuildInfo {
+  const commitId = String(process.env[commitIdEnv] ?? "").trim();
+  if (!commitId) {
+    return toUnknownBuildInfo();
   }
+
+  const timestampRaw = String(process.env[timestampEnv] ?? "").trim();
+  const { date, time } = formatBuildDateParts(timestampRaw);
+  return {
+    commitId,
+    date,
+    time,
+  };
 }
 
 export async function GET() {
-  const fromFile = await readBuildInfoFromFile();
-  if (
-    fromFile &&
-    (isKnownBuildInfo(fromFile.client) || isKnownBuildInfo(fromFile.server))
-  ) {
+  const clientRepoPath = process.cwd();
+  const defaultServerRepoPath = path.resolve(process.cwd(), "..", "sopra-fs26-group-26-server");
+  const serverRepoPath = process.env.CABO_SERVER_REPO_PATH || defaultServerRepoPath;
+
+  const clientFromEnv = readBuildInfoFromEnv(
+    "CABO_CLIENT_BUILD_COMMIT_ID",
+    "CABO_CLIENT_BUILD_COMMIT_TIMESTAMP",
+  );
+  const serverFromEnv = readBuildInfoFromEnv(
+    "CABO_SERVER_BUILD_COMMIT_ID",
+    "CABO_SERVER_BUILD_COMMIT_TIMESTAMP",
+  );
+
+  const [clientFromGit, serverFromGit] = await Promise.all([
+    readBuildInfo(clientRepoPath),
+    readBuildInfo(serverRepoPath),
+  ]);
+
+  const resolvedClient = isKnownBuildInfo(clientFromEnv) ? clientFromEnv : clientFromGit;
+  const resolvedServer = isKnownBuildInfo(serverFromEnv) ? serverFromEnv : serverFromGit;
+
+  if (isKnownBuildInfo(resolvedClient) || isKnownBuildInfo(resolvedServer)) {
     return NextResponse.json(
-      fromFile,
+      {
+        client: resolvedClient,
+        server: resolvedServer,
+      },
       {
         headers: {
           "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
@@ -116,19 +119,10 @@ export async function GET() {
     );
   }
 
-  const clientRepoPath = process.cwd();
-  const defaultServerRepoPath = path.resolve(process.cwd(), "..", "sopra-fs26-group-26-server");
-  const serverRepoPath = process.env.CABO_SERVER_REPO_PATH || defaultServerRepoPath;
-
-  const [client, server] = await Promise.all([
-    readBuildInfo(clientRepoPath),
-    readBuildInfo(serverRepoPath),
-  ]);
-
   return NextResponse.json(
     {
-      client,
-      server,
+      client: toUnknownBuildInfo(),
+      server: toUnknownBuildInfo(),
     },
     {
       headers: {

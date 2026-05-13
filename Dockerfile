@@ -10,9 +10,18 @@ RUN npm config set cache /app/.npm-cache --global
 RUN npm ci --loglevel=error
 # Copy app (useless stuff is ignored by .dockerignore)
 COPY . .
+# Optional build metadata overrides for environments where `.git` is not present in build context
+ARG CABO_CLIENT_BUILD_COMMIT_ID
+ARG CABO_CLIENT_BUILD_COMMIT_TIMESTAMP
+ARG CABO_SERVER_BUILD_COMMIT_ID
+ARG CABO_SERVER_BUILD_COMMIT_TIMESTAMP
+ENV CABO_CLIENT_BUILD_COMMIT_ID=${CABO_CLIENT_BUILD_COMMIT_ID}
+ENV CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${CABO_CLIENT_BUILD_COMMIT_TIMESTAMP}
+ENV CABO_SERVER_BUILD_COMMIT_ID=${CABO_SERVER_BUILD_COMMIT_ID}
+ENV CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${CABO_SERVER_BUILD_COMMIT_TIMESTAMP}
 # Build the app
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run prebuild && node --no-opt --max-old-space-size=4096 ./node_modules/next/dist/bin/next build
+RUN node --no-opt --max-old-space-size=4096 ./node_modules/next/dist/bin/next build
 
 # Use small production image
 FROM node:20-alpine

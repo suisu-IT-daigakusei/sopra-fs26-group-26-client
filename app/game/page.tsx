@@ -1020,7 +1020,9 @@ const Game = () => {
       const isIntroPhase = gameStatus === "intro";
       const isCaboRevealPhase = gameStatus === "cabo_reveal";
       const isAwaitingRematchDecision = gameStatus === "round_awaiting_rematch";
-      const isPostRoundPhase = isCaboRevealPhase || isAwaitingRematchDecision;
+      const isRoundEndedPhase = gameStatus === "round_ended";
+      const isRematchScreenPhase = isAwaitingRematchDecision || isRoundEndedPhase;
+      const isPostRoundPhase = isCaboRevealPhase || isRematchScreenPhase;
       const [myHand, setMyHand] = useState<Card[]>([]);
       const [selectedPeekIndices, setSelectedPeekIndices] = useState<number[]>([]);
       const [isSubmittingInitialPeek, setIsSubmittingInitialPeek] = useState<boolean>(false);
@@ -2874,20 +2876,51 @@ useEffect(() => {
 
     let active = true;
     consecutiveNotMyTurnPollsRef.current = 0;
+    const resolveTurnOwnerFromServer = async (): Promise<number | null> => {
+        const candidateIds = Array.from(
+            new Set(
+                (tablePlayerIdsRef.current.length > 0
+                    ? tablePlayerIdsRef.current
+                    : [selfUserId]
+                ).filter((id) => Number.isFinite(id))
+            )
+        );
+        if (candidateIds.length === 0) {
+            return null;
+        }
+
+        const checks = await Promise.allSettled(
+            candidateIds.map(async (candidateUserId) => {
+                const isTurn = await apiService.get<boolean>(
+                    `/games/${encodeURIComponent(gameId)}/is-my-turn/${candidateUserId}`
+                );
+                return isTurn ? candidateUserId : null;
+            })
+        );
+
+        for (const result of checks) {
+            if (result.status === "fulfilled" && result.value != null) {
+                return result.value;
+            }
+        }
+        return null;
+    };
+
     const syncTurnOwnership = async () => {
         try {
-            const isMyTurnServer = await apiService.get<boolean>(
-                `/games/${encodeURIComponent(gameId)}/is-my-turn/${selfUserId}`
-            );
+            const nextTurnUserId = await resolveTurnOwnerFromServer();
             if (!active) {
                 return;
             }
 
+            // Successful authoritative HTTP turn probe means we are synced enough to resume input.
+            setSocketSynced(true);
+
             setCurrentTurnUserId((previous) => {
-                if (isMyTurnServer) {
+                if (nextTurnUserId != null) {
                     consecutiveNotMyTurnPollsRef.current = 0;
-                    currentTurnUserIdRef.current = selfUserId;
-                    return previous === selfUserId ? previous : selfUserId;
+                    currentTurnUserIdRef.current = nextTurnUserId;
+                    return previous === nextTurnUserId ? previous : nextTurnUserId;
                 }
 
                 // Do not immediately demote during an active ability interaction.
@@ -2911,7 +2944,8 @@ useEffect(() => {
                     return null;
                 }
                 consecutiveNotMyTurnPollsRef.current = 0;
-                return previous;
+                currentTurnUserIdRef.current = null;
+                return null;
             });
         } catch {
             // Keep websocket state as-is when poll fails transiently
@@ -3030,6 +3064,36 @@ useEffect(() => {
     };
 // Poll cadence depends on sync state; helper refs are intentionally omitted.
 // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [apiService, gameId, token, socketSynced]);
+
+useEffect(() => {
+    const authToken = token.trim();
+    if (!gameId || !authToken || socketSynced) {
+        return;
+    }
+
+    let active = true;
+    const recoverSyncFromHttp = async () => {
+        try {
+            await apiService.getWithAuth<GameRuntimeConfigResponse>(
+                `/games/${gameId}/config`,
+                authToken
+            );
+            if (!active) {
+                return;
+            }
+            setSocketSynced(true);
+        } catch {
+            // keep waiting for next retry
+        }
+    };
+
+    void recoverSyncFromHttp();
+    const intervalId = window.setInterval(recoverSyncFromHttp, 1500);
+    return () => {
+        active = false;
+        window.clearInterval(intervalId);
+    };
 }, [apiService, gameId, token, socketSynced]);
 
 const clearFlyingCardTimer = () => {
@@ -3778,22 +3842,32 @@ const playerListRows = tablePlayerIds.map((id) => {
           };
       });
 
+      const showResyncOverlay =
+          !socketSynced &&
+          gameStatus !== "initial_peek" &&
+          gameStatus !== "intro" &&
+          gameStatus !== "cabo_reveal" &&
+          gameStatus !== "round_awaiting_rematch" &&
+          gameStatus !== "round_ended";
+
       return (
           <div className="cabo-background cabo-background-game">
               <div className="game-overlay">
-                  <div className="game-player-list" aria-label="Players in game">
-                      {playerListRows.map((player) => (
-                          <div
-                              key={player.id}
-                              className={`game-player-list-item${player.isActive ? " active" : ""}${player.isTimedOut ? " timedout" : ""}`}
-                          >
-                              <span>{player.label}</span>
-                              {player.isActive && showTurnCountdown && (
-                                  <span className="game-player-list-timer">{displayedTurnTimeLeft}s</span>
-                              )}
-                          </div>
-                      ))}
-                  </div>
+                  {!isRematchScreenPhase && (
+                      <div className="game-player-list" aria-label="Players in game">
+                          {playerListRows.map((player) => (
+                              <div
+                                  key={player.id}
+                                  className={`game-player-list-item${player.isActive ? " active" : ""}${player.isTimedOut ? " timedout" : ""}`}
+                              >
+                                  <span>{player.label}</span>
+                                  {player.isActive && showTurnCountdown && (
+                                      <span className="game-player-list-timer">{displayedTurnTimeLeft}s</span>
+                                  )}
+                              </div>
+                          ))}
+                      </div>
+                  )}
 
                   {isCaboRevealPhase && (
                       <div className="game-rematch-overlay game-rematch-overlay-cabo-reveal" role="status" aria-live="polite">
@@ -3810,7 +3884,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                       </div>
                   )}
 
-                  {!socketSynced && gameStatus !== "initial_peek" && gameStatus !== "intro" && (
+                  {showResyncOverlay && (
                       <div className="game-rematch-overlay" role="status" aria-live="polite">
                           <div className="game-rematch-card">
                               <h2 className="game-rematch-title">Resyncing</h2>
@@ -3821,7 +3895,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                       </div>
                   )}
 
-                  {showAfkWarning && (
+                  {showAfkWarning && !isRematchScreenPhase && (
                       <div className="game-rematch-overlay" role="status" aria-live="polite">
                           <div className="game-rematch-card">
                               <h2 className="game-rematch-title">AFK Warning</h2>
@@ -3860,7 +3934,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                   />
                   {/* #34: Final Score Screen */}
                   <FinalScoreScreen
-                      isOpen={isAwaitingRematchDecision}
+                      isOpen={isRematchScreenPhase}
                       players={finalScores}
                       selfUserId={selfUserId}
                       totalRounds={finalScoreTotalRounds}
@@ -3869,95 +3943,97 @@ const playerListRows = tablePlayerIds.map((id) => {
                       isSubmittingRematchDecision={isSubmittingRematchDecision}
                       onChooseRematch={submitRematchChoice}
                   />
-                  {/* #32A banner or visual cue that stays on screen for everyone once Cabo is called (e.g., "Final Round!") */}
-                  {isCaboCalledGlobal && gameStatus !== "round_ended" && gameStatus !== "round_awaiting_rematch" &&  gameStatus !== "cabo_reveal" &&(
-                      <div style={{
-                          position: "fixed",
-                          bottom: "auto",
-                          top: "25%",
-                          left: "50%",
-                          transform: "translateX(-50%)",
-                          zIndex: 500,
-                          backgroundColor: isCaboForcedByTimeoutGlobal
-                            ? "rgba(150, 50, 50, 0.88)"
-                            : "rgba(200, 80, 50, 0.88)",
-                          color: "white",
-                          padding: "10px 28px",
-                          borderRadius: "12px",
-                          fontWeight: "bold",
-                          fontSize: "18px",
-                          textAlign: "center",
-                          boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
-                          backdropFilter: "blur(6px)",
-                          border: "2px solid rgba(255,255,255,0.25)",
-                          pointerEvents: "none",
-                          whiteSpace: "nowrap",
-                      }}>
-                          {isCaboForcedByTimeoutGlobal
-                            ? "Cabo called! Final Round!"
-                            : "Cabo Called! Final Round!"}
-                      </div>
-                  )}
+                  {!isRematchScreenPhase && (
+                      <>
+                          {/* #32A banner or visual cue that stays on screen for everyone once Cabo is called (e.g., "Final Round!") */}
+                          {isCaboCalledGlobal && gameStatus !== "round_ended" && gameStatus !== "round_awaiting_rematch" &&  gameStatus !== "cabo_reveal" &&(
+                              <div style={{
+                                  position: "fixed",
+                                  bottom: "auto",
+                                  top: "25%",
+                                  left: "50%",
+                                  transform: "translateX(-50%)",
+                                  zIndex: 500,
+                                  backgroundColor: isCaboForcedByTimeoutGlobal
+                                    ? "rgba(150, 50, 50, 0.88)"
+                                    : "rgba(200, 80, 50, 0.88)",
+                                  color: "white",
+                                  padding: "10px 28px",
+                                  borderRadius: "12px",
+                                  fontWeight: "bold",
+                                  fontSize: "18px",
+                                  textAlign: "center",
+                                  boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+                                  backdropFilter: "blur(6px)",
+                                  border: "2px solid rgba(255,255,255,0.25)",
+                                  pointerEvents: "none",
+                                  whiteSpace: "nowrap",
+                              }}>
+                                  {isCaboForcedByTimeoutGlobal
+                                    ? "Cabo called! Final Round!"
+                                    : "Cabo Called! Final Round!"}
+                              </div>
+                          )}
 
 
-                  {/* TOP CENTER */}
-                  {seatAssignments.topOpponentId != null && (
-                      <div className="top-cards opponent-seat-top">
-                          <div className="game-opponent-seat-cards game-opponent-seat-cards-top">
-                              {topSeatDisplayCards.map((card, displayIndex) => {
-                                  const slotIndex =
-                                      normalizeHandSlotIndex(card.position, HAND_SIZE) ??
-                                      (HAND_SIZE - 1 - displayIndex);
-                                  return (
-                                      <div
-                                          key={`top-${slotIndex}`}
-                                          ref={(element) => {
-                                              topSeatCardRefs.current[slotIndex] = element;
-                                          }}
-                                          className="game-opponent-card-anchor"
-                                      >
-                                          <CardComponent
-                                              hidden={isPostRoundPhase ? false : card.faceDown}
-                                              value={card.value}
-                                              size="small"
-                                              // #28: highlight opponent cards during ability phase
-                                              onClick={() => {
-                                                  if (canInteractWithAbilityTargets && seatAssignments.topOpponentId != null) {
-                                                      handleAbilityOpponentCardClick(seatAssignments.topOpponentId, slotIndex);
-                                                  }
-                                              }}
-                                              disabled={
-                                                  !(canInteractWithAbilityTargets && (
-                                                      gameStatus === "ability_peek_opponent" ||
-                                                      (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
-                                                  ))
-                                              }
-                                              style={
-                                                  canInteractWithAbilityTargets && (
-                                                      gameStatus === "ability_peek_opponent" ||
-                                                      (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
-                                                  ) ? {
-                                                      outline: "3px solid #c4827a",
-                                                      outlineOffset: "2px",
-                                                      transform: "rotate(180deg)",
-                                                  } : {
-                                                  transform: "rotate(180deg)",
-                                              }}
-                                          />
-                                      </div>
-                                  );
-                              })}
-                          </div>
-                          <div
-                              className={`game-opponent-seat-name${
-                                  currentTurnUserId === seatAssignments.topOpponentId ? " active" : ""
-                              }`}
-                              title={playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
-                          >
-                              {playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
-                          </div>
-                      </div>
-                  )}
+                          {/* TOP CENTER */}
+                          {seatAssignments.topOpponentId != null && (
+                              <div className="top-cards opponent-seat-top">
+                                  <div className="game-opponent-seat-cards game-opponent-seat-cards-top">
+                                      {topSeatDisplayCards.map((card, displayIndex) => {
+                                          const slotIndex =
+                                              normalizeHandSlotIndex(card.position, HAND_SIZE) ??
+                                              (HAND_SIZE - 1 - displayIndex);
+                                          return (
+                                              <div
+                                                  key={`top-${slotIndex}`}
+                                                  ref={(element) => {
+                                                      topSeatCardRefs.current[slotIndex] = element;
+                                                  }}
+                                                  className="game-opponent-card-anchor"
+                                              >
+                                                  <CardComponent
+                                                      hidden={isPostRoundPhase ? false : card.faceDown}
+                                                      value={card.value}
+                                                      size="small"
+                                                      // #28: highlight opponent cards during ability phase
+                                                      onClick={() => {
+                                                          if (canInteractWithAbilityTargets && seatAssignments.topOpponentId != null) {
+                                                              handleAbilityOpponentCardClick(seatAssignments.topOpponentId, slotIndex);
+                                                          }
+                                                      }}
+                                                      disabled={
+                                                          !(canInteractWithAbilityTargets && (
+                                                              gameStatus === "ability_peek_opponent" ||
+                                                              (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
+                                                          ))
+                                                      }
+                                                      style={
+                                                          canInteractWithAbilityTargets && (
+                                                              gameStatus === "ability_peek_opponent" ||
+                                                              (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
+                                                          ) ? {
+                                                              outline: "3px solid #c4827a",
+                                                              outlineOffset: "2px",
+                                                              transform: "rotate(180deg)",
+                                                          } : {
+                                                          transform: "rotate(180deg)",
+                                                      }}
+                                                  />
+                                              </div>
+                                          );
+                                      })}
+                                  </div>
+                                  <div
+                                      className={`game-opponent-seat-name${
+                                          currentTurnUserId === seatAssignments.topOpponentId ? " active" : ""
+                                      }`}
+                                      title={playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
+                                  >
+                                      {playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
+                                  </div>
+                              </div>
+                          )}
 
                   {/* LEFT SIDE */}
                   {seatAssignments.leftOpponentId != null && (
@@ -4284,34 +4360,36 @@ const playerListRows = tablePlayerIds.map((id) => {
                       })}
                   </div>
 
-                  {flyingCardAnimations.length > 0 && (
-                      <div className="game-flying-card-layer" aria-hidden="true">
-                          {flyingCardAnimations.map((animation) => (
-                              <div
-                                  key={animation.id}
-                                  className="game-flying-card"
-                                  style={{
-                                      left: `${animation.startX}px`,
-                                      top: `${animation.startY}px`,
-                                      width: `${animation.width}px`,
-                                      height: `${animation.height}px`,
-                                      ["--fly-delta-x" as string]: `${animation.deltaX}px`,
-                                      ["--fly-delta-y" as string]: `${animation.deltaY}px`,
-                                  } as React.CSSProperties}
-                              >
-                                  <CardComponent
-                                      hidden={animation.hidden}
-                                      value={animation.value}
-                                      size="medium"
-                                      style={{
-                                          width: "100%",
-                                          height: "100%",
-                                          pointerEvents: "none",
-                                      }}
-                                  />
+                          {flyingCardAnimations.length > 0 && (
+                              <div className="game-flying-card-layer" aria-hidden="true">
+                                  {flyingCardAnimations.map((animation) => (
+                                      <div
+                                          key={animation.id}
+                                          className="game-flying-card"
+                                          style={{
+                                              left: `${animation.startX}px`,
+                                              top: `${animation.startY}px`,
+                                              width: `${animation.width}px`,
+                                              height: `${animation.height}px`,
+                                              ["--fly-delta-x" as string]: `${animation.deltaX}px`,
+                                              ["--fly-delta-y" as string]: `${animation.deltaY}px`,
+                                          } as React.CSSProperties}
+                                      >
+                                          <CardComponent
+                                              hidden={animation.hidden}
+                                              value={animation.value}
+                                              size="medium"
+                                              style={{
+                                                  width: "100%",
+                                                  height: "100%",
+                                                  pointerEvents: "none",
+                                              }}
+                                          />
+                                      </div>
+                                  ))}
                               </div>
-                          ))}
-                      </div>
+                          )}
+                      </>
                   )}
 
               </div>

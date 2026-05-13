@@ -410,9 +410,8 @@ function WaitingLobbyContent() {
   const [lobbyWsConnected, setLobbyWsConnected] = useState(false);
   const [userIsHost, setUserIsHost] = useState(false);
   const [isPublicLobby, setIsPublicLobby] = useState(false);
-  // Add a checkbox/toggle in the "Join Session" or "Lobby" screen for the "Publicly Visible Moves" flag.
-  // #46
-  const [publiclyVisibleMoves, setPubliclyVisibleMoves] = useState<boolean>(false);
+  const [moveHistoryPublic, setMoveHistoryPublic] = useState<boolean>(true);
+  const [updatingMoveHistoryPublic, setUpdatingMoveHistoryPublic] = useState(false);
 
   const [inviteLoadingById, setInviteLoadingById] = useState<
     Record<string, boolean>
@@ -648,6 +647,38 @@ function WaitingLobbyContent() {
       active = false;
     };
   }, [api, normalizedUserId, router, sessionIdParam, token]);
+
+  useEffect(() => {
+    const authToken = token.trim();
+    const uid = normalizedUserId;
+    if (!authToken || !uid) {
+      return;
+    }
+
+    let active = true;
+    const loadMoveHistoryVisibility = async () => {
+      try {
+        const me = await api.getWithAuth<User>(
+          `/users/${encodeURIComponent(uid)}`,
+          authToken,
+        );
+        if (!active) {
+          return;
+        }
+        setMoveHistoryPublic(me?.isPublicLog !== false);
+      } catch {
+        if (active) {
+          setMoveHistoryPublic(true);
+        }
+      }
+    };
+
+    void loadMoveHistoryVisibility();
+
+    return () => {
+      active = false;
+    };
+  }, [api, normalizedUserId, token]);
 
   const loadView = useCallback(async () => {
     const authToken = token.trim();
@@ -1326,24 +1357,26 @@ function WaitingLobbyContent() {
       });
   };
 
-// Add a checkbox/toggle in the "Join Session" or "Lobby" screen for the "Publicly Visible Moves" flag.
-// #46
-  const handleMovesVisibilityToggle = (makePublic: boolean) => {
-      if (!userIsHost) return;
-      const authToken = token.trim();
-      if (!authToken || !sessionId) return;
+  const handleMoveHistoryVisibilityToggle = (makePublic: boolean) => {
+    const authToken = token.trim();
+    const uid = normalizedUserId;
+    if (!authToken || !uid || updatingMoveHistoryPublic) {
+      return;
+    }
 
-      const previous = publiclyVisibleMoves;
-      setPubliclyVisibleMoves(makePublic);
+    const previous = moveHistoryPublic;
+    setMoveHistoryPublic(makePublic);
+    setUpdatingMoveHistoryPublic(true);
 
-      // TODO: backend needs PATCH /lobbies/{sessionId}/settings with { publiclyVisibleMoves: boolean }
-      void api.patchWithAuth(
-          `/lobbies/${encodeURIComponent(sessionId)}/settings`,
-          { publiclyVisibleMoves: makePublic },
-          authToken,
-      ).catch(() => {
-          setPubliclyVisibleMoves(previous);
-      });
+    void api.putWithAuth(
+      `/users/${encodeURIComponent(uid)}`,
+      { isPublicLog: makePublic },
+      authToken,
+    ).catch(() => {
+      setMoveHistoryPublic(previous);
+    }).finally(() => {
+      setUpdatingMoveHistoryPublic(false);
+    });
   };
 
   const handleViewerReadyToggle = () => {
@@ -1813,17 +1846,18 @@ function WaitingLobbyContent() {
                       />
                     </div>
                   </div>
-                  {/* #46: Add a checkbox/toggle in the "Join Session" or "Lobby" screen for the "Publicly Visible Moves" flag. */}
                   <div className="lobby-setting-row lobby-setting-row-toggle">
-                      <span className="lobby-setting-row-label">Publicly Visible Moves</span>
-                      <div className="lobby-setting-row-control lobby-setting-row-control-toggle">
-                          <Switch
-                              checked={publiclyVisibleMoves}
-                              onChange={handleMovesVisibilityToggle}
-                              checkedChildren="Yes"
-                              unCheckedChildren="No"
-                          />
-                      </div>
+                    <span className="lobby-setting-row-label">Share Move History</span>
+                    <div className="lobby-setting-row-control lobby-setting-row-control-toggle">
+                      <Switch
+                        className="lobby-private-switch"
+                        checked={moveHistoryPublic}
+                        loading={updatingMoveHistoryPublic}
+                        onChange={handleMoveHistoryVisibilityToggle}
+                        checkedChildren="Yes"
+                        unCheckedChildren="No"
+                      />
+                    </div>
                   </div>
                   <div className="lobby-setting-row">
                     <span className="lobby-setting-row-label">Game AFK/DC Timeout (sec)</span>
@@ -2015,6 +2049,35 @@ function WaitingLobbyContent() {
                         }}
                       />
                       <span className="lobby-setting-row-value">{lobbyTimerSettings.absentRoundPoints}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          ) : null}
+
+          {!userIsHost ? (
+            <Card
+              title={
+                <div className="lobby-section-title-row">
+                  <span className="lobby-section-title">Settings</span>
+                </div>
+              }
+              className="dashboard-container"
+            >
+              <div className="create-lobby-actions">
+                <div className="lobby-settings-list">
+                  <div className="lobby-setting-row lobby-setting-row-toggle">
+                    <span className="lobby-setting-row-label">Share Move History</span>
+                    <div className="lobby-setting-row-control lobby-setting-row-control-toggle">
+                      <Switch
+                        className="lobby-private-switch"
+                        checked={moveHistoryPublic}
+                        loading={updatingMoveHistoryPublic}
+                        onChange={handleMoveHistoryVisibilityToggle}
+                        checkedChildren="Yes"
+                        unCheckedChildren="No"
+                      />
                     </div>
                   </div>
                 </div>

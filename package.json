@@ -3,9 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/generate-build-info.mjs",
     "dev": "next dev --turbopack",
-    "prebuild": "node scripts/generate-build-info.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "deno lint",

@@ -14,22 +14,24 @@ import {
   USER_DEFAULT_GAME_BACKGROUND_ID,
   USER_DEFAULT_MENU_BACKGROUND_ID,
   USER_DEFAULT_MUSIC_VOLUME,
+  USER_DEFAULT_APPEARANCE_MODE,
   USER_DEFAULT_PRIMARY_COLOR_ID,
   USER_DEFAULT_SOUND_EFFECTS_VOLUME,
-  USER_DEFAULT_TEXT_COLOR_ID,
+  USER_APPEARANCE_OPTIONS,
   USER_PRIMARY_COLOR_OPTIONS,
   USER_PRIORITY_COLOR_OPTIONS,
   USER_PRIORITY_LABELS,
   USER_PROFILE_CHARACTER_OPTIONS,
-  USER_TEXT_COLOR_OPTIONS,
+  appearanceModeToStorageValue,
   backgroundFileToCssUrl,
   hasDuplicatePriorityColors,
   normalizeCharacterId,
+  normalizeAppearanceMode,
   normalizeMusicBlacklist,
   normalizePreferredColorPriority,
   normalizePrimaryColorId,
-  normalizeTextColorId,
   normalizeVolume,
+  resolveEffectiveAppearance,
   resolveBackgroundFile,
 } from "@/utils/userSettings";
 import { Button, Card, Form, Input, Select, Slider, Switch, message } from "antd";
@@ -66,10 +68,10 @@ function normalizeTagList(values: string[]): string[] {
 
 type GraphicsSelectionState = {
   tutorialsEnabled: boolean;
+  selectedAppearance: string;
+  selectedPrimaryColor: string;
   selectedMenuBackground: string;
   selectedGameBackground: string;
-  selectedPrimaryColor: string;
-  selectedTextColor: string;
 };
 
 type SoundsSelectionState = {
@@ -86,7 +88,7 @@ type BackgroundOptionsResponse = {
 const MENU_BACKGROUND_STORAGE_KEY = "menuBackgroundAsset";
 const GAME_BACKGROUND_STORAGE_KEY = "gameBackgroundAsset";
 const PRIMARY_COLOR_STORAGE_KEY = "primaryColorId";
-const TEXT_COLOR_STORAGE_KEY = "textColorId";
+const APPEARANCE_STORAGE_KEY = "appearanceMode";
 
 const SettingsPage = () => {
   const router = useRouter();
@@ -113,16 +115,17 @@ const SettingsPage = () => {
   const [selectedMenuBackground, setSelectedMenuBackground] = useState<string>(USER_DEFAULT_MENU_BACKGROUND_ID);
   const [selectedGameBackground, setSelectedGameBackground] = useState<string>(USER_DEFAULT_GAME_BACKGROUND_ID);
   const [selectedPrimaryColor, setSelectedPrimaryColor] = useState<string>(USER_DEFAULT_PRIMARY_COLOR_ID);
-  const [selectedTextColor, setSelectedTextColor] = useState<string>(USER_DEFAULT_TEXT_COLOR_ID);
+  const [selectedAppearance, setSelectedAppearance] = useState<string>(USER_DEFAULT_APPEARANCE_MODE);
   const [tutorialsEnabled, setTutorialsEnabled] = useState(true);
   const [savedGraphicsSelection, setSavedGraphicsSelection] = useState<GraphicsSelectionState>({
     tutorialsEnabled: true,
+    selectedAppearance: USER_DEFAULT_APPEARANCE_MODE,
+    selectedPrimaryColor: USER_DEFAULT_PRIMARY_COLOR_ID,
     selectedMenuBackground: USER_DEFAULT_MENU_BACKGROUND_ID,
     selectedGameBackground: USER_DEFAULT_GAME_BACKGROUND_ID,
-    selectedPrimaryColor: USER_DEFAULT_PRIMARY_COLOR_ID,
-    selectedTextColor: USER_DEFAULT_TEXT_COLOR_ID,
   });
   const [savingGraphics, setSavingGraphics] = useState(false);
+  const [prefersSystemDark, setPrefersSystemDark] = useState(true);
 
   const [musicVolume, setMusicVolume] = useState(USER_DEFAULT_MUSIC_VOLUME);
   const [soundEffectsVolume, setSoundEffectsVolume] = useState(USER_DEFAULT_SOUND_EFFECTS_VOLUME);
@@ -140,9 +143,9 @@ const SettingsPage = () => {
     PRIMARY_COLOR_STORAGE_KEY,
     USER_DEFAULT_PRIMARY_COLOR_ID,
   );
-  const { set: setStoredTextColorId } = useLocalStorage<string>(
-    TEXT_COLOR_STORAGE_KEY,
-    USER_DEFAULT_TEXT_COLOR_ID,
+  const { set: setStoredAppearanceMode } = useLocalStorage<string>(
+    APPEARANCE_STORAGE_KEY,
+    USER_DEFAULT_APPEARANCE_MODE,
   );
   const skipUnsavedGuardRef = useRef(false);
   const passwordValue = Form.useWatch("password", form);
@@ -258,21 +261,21 @@ const SettingsPage = () => {
           availableBackgroundFilesSet,
         );
         const nextPrimaryColorId = normalizePrimaryColorId(fetchedUser?.primaryColorId);
-        const nextTextColorId = normalizeTextColorId(fetchedUser?.textColorId);
+        const nextAppearanceMode = normalizeAppearanceMode(fetchedUser?.appearanceMode);
         const nextTutorialsEnabled = fetchedUser?.tutorialsEnabled !== false;
         setTutorialsEnabled(nextTutorialsEnabled);
+        setSelectedAppearance(nextAppearanceMode);
         setSelectedMenuBackground(nextMenuBackgroundId);
         setSelectedGameBackground(nextGameBackgroundId);
         setSelectedPrimaryColor(nextPrimaryColorId);
         setStoredPrimaryColorId(nextPrimaryColorId);
-        setSelectedTextColor(nextTextColorId);
-        setStoredTextColorId(nextTextColorId);
+        setStoredAppearanceMode(nextAppearanceMode);
         setSavedGraphicsSelection({
           tutorialsEnabled: nextTutorialsEnabled,
+          selectedAppearance: nextAppearanceMode,
+          selectedPrimaryColor: nextPrimaryColorId,
           selectedMenuBackground: nextMenuBackgroundId,
           selectedGameBackground: nextGameBackgroundId,
-          selectedPrimaryColor: nextPrimaryColorId,
-          selectedTextColor: nextTextColorId,
         });
 
         const nextMusicVolume = normalizeVolume(fetchedUser?.musicVolume, USER_DEFAULT_MUSIC_VOLUME);
@@ -308,15 +311,15 @@ const SettingsPage = () => {
         setSelectedGameBackground(fallbackGameBackground);
         setSelectedPrimaryColor(USER_DEFAULT_PRIMARY_COLOR_ID);
         setStoredPrimaryColorId(USER_DEFAULT_PRIMARY_COLOR_ID);
-        setSelectedTextColor(USER_DEFAULT_TEXT_COLOR_ID);
-        setStoredTextColorId(USER_DEFAULT_TEXT_COLOR_ID);
+        setSelectedAppearance(USER_DEFAULT_APPEARANCE_MODE);
+        setStoredAppearanceMode(USER_DEFAULT_APPEARANCE_MODE);
         setTutorialsEnabled(true);
         setSavedGraphicsSelection({
           tutorialsEnabled: true,
+          selectedAppearance: USER_DEFAULT_APPEARANCE_MODE,
+          selectedPrimaryColor: USER_DEFAULT_PRIMARY_COLOR_ID,
           selectedMenuBackground: fallbackMenuBackground,
           selectedGameBackground: fallbackGameBackground,
-          selectedPrimaryColor: USER_DEFAULT_PRIMARY_COLOR_ID,
-          selectedTextColor: USER_DEFAULT_TEXT_COLOR_ID,
         });
         setMusicVolume(USER_DEFAULT_MUSIC_VOLUME);
         setSoundEffectsVolume(USER_DEFAULT_SOUND_EFFECTS_VOLUME);
@@ -334,7 +337,25 @@ const SettingsPage = () => {
     return () => {
       active = false;
     };
-  }, [apiService, availableBackgroundFilesSet, setStoredPrimaryColorId, setStoredTextColorId, token, userId]);
+  }, [apiService, availableBackgroundFilesSet, setStoredAppearanceMode, setStoredPrimaryColorId, token, userId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setPrefersSystemDark(mediaQuery.matches);
+    apply();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", apply);
+      return () => mediaQuery.removeEventListener("change", apply);
+    }
+
+    mediaQuery.addListener(apply);
+    return () => mediaQuery.removeListener(apply);
+  }, []);
 
   const colorPriorityOptionsByIndex = useMemo(
     () => {
@@ -373,10 +394,10 @@ const SettingsPage = () => {
   const profileDirty = characterDirty || bioDirty || colorPriorityDirty;
   const graphicsDirty =
     tutorialsEnabled !== savedGraphicsSelection.tutorialsEnabled ||
-    selectedMenuBackground !== savedGraphicsSelection.selectedMenuBackground ||
-    selectedGameBackground !== savedGraphicsSelection.selectedGameBackground ||
+    selectedAppearance !== savedGraphicsSelection.selectedAppearance ||
     selectedPrimaryColor !== savedGraphicsSelection.selectedPrimaryColor ||
-    selectedTextColor !== savedGraphicsSelection.selectedTextColor;
+    selectedMenuBackground !== savedGraphicsSelection.selectedMenuBackground ||
+    selectedGameBackground !== savedGraphicsSelection.selectedGameBackground;
   const normalizedMusicBlacklist = useMemo(
     () => normalizeTagList(musicBlacklist),
     [musicBlacklist],
@@ -510,24 +531,24 @@ const SettingsPage = () => {
     try {
       await updateUserSettings({
         tutorialsEnabled,
+        appearanceMode: appearanceModeToStorageValue(selectedAppearance),
+        primaryColorId: selectedPrimaryColor,
         menuBackgroundId: selectedMenuBackground,
         gameBackgroundId: selectedGameBackground,
-        primaryColorId: selectedPrimaryColor,
-        textColorId: selectedTextColor,
       });
       setSavedGraphicsSelection({
         tutorialsEnabled,
+        selectedAppearance,
+        selectedPrimaryColor,
         selectedMenuBackground,
         selectedGameBackground,
-        selectedPrimaryColor,
-        selectedTextColor,
       });
       if (typeof window !== "undefined") {
         window.localStorage.setItem(MENU_BACKGROUND_STORAGE_KEY, selectedMenuBackground);
         window.localStorage.setItem(GAME_BACKGROUND_STORAGE_KEY, selectedGameBackground);
       }
       setStoredPrimaryColorId(selectedPrimaryColor);
-      setStoredTextColorId(selectedTextColor);
+      setStoredAppearanceMode(selectedAppearance);
       if (typeof document !== "undefined") {
         document.documentElement.style.setProperty(
           "--cabo-menu-background-image",
@@ -548,11 +569,12 @@ const SettingsPage = () => {
     }
   };
 
-  const isDarkTextTheme = normalizeTextColorId(selectedTextColor) === "dark";
-  const selectSurfaceClass = isDarkTextTheme
+  const effectiveAppearance = resolveEffectiveAppearance(selectedAppearance, prefersSystemDark);
+  const isLightAppearance = effectiveAppearance === "light";
+  const selectSurfaceClass = isLightAppearance
     ? "settings-select-surface-light"
     : "settings-select-surface-dark";
-  const selectDropdownClass = isDarkTextTheme
+  const selectDropdownClass = isLightAppearance
     ? "settings-select-dropdown-light"
     : "settings-select-dropdown-dark";
 
@@ -699,7 +721,7 @@ const SettingsPage = () => {
                 </div>
                 {editingBio ? (
                   <Input.TextArea
-                    className={`settings-bio-input ${isDarkTextTheme ? "settings-input-surface-light" : "settings-input-surface-dark"}`}
+                    className={`settings-bio-input ${isLightAppearance ? "settings-input-surface-light" : "settings-input-surface-dark"}`}
                     rows={4}
                     value={bioDraft}
                     onChange={(event) => setBioDraft(event.target.value)}
@@ -771,6 +793,41 @@ const SettingsPage = () => {
               </div>
 
               <div className="settings-option-block">
+                <div className="settings-option-title">Appearance</div>
+                <div className="settings-appearance-selector" role="radiogroup" aria-label="Select appearance">
+                  {USER_APPEARANCE_OPTIONS.map((appearanceOption) => (
+                    <button
+                      key={appearanceOption.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selectedAppearance === appearanceOption.id}
+                      className={`settings-appearance-dot-btn settings-appearance-dot-btn-${appearanceOption.id}${selectedAppearance === appearanceOption.id ? " settings-appearance-dot-btn-selected" : ""}`}
+                      onClick={() => setSelectedAppearance(appearanceOption.id)}
+                    >
+                      <span className="settings-appearance-dot" aria-hidden="true" />
+                      <span>{appearanceOption.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="settings-option-block">
+                <div className="settings-option-title">Primary Color</div>
+                <div className="settings-color-chip-row" role="listbox" aria-label="Select primary color">
+                  {USER_PRIMARY_COLOR_OPTIONS.map((colorOption) => (
+                    <button
+                      key={colorOption.id}
+                      type="button"
+                      className={`settings-color-chip${selectedPrimaryColor === colorOption.id ? " settings-color-chip-selected" : ""}`}
+                      style={{ ["--settings-chip-color" as string]: colorOption.hex }}
+                      onClick={() => setSelectedPrimaryColor(colorOption.id)}
+                      aria-label={colorOption.label}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="settings-option-block">
                 <div className="settings-option-title">Menu Background</div>
                 <div className="settings-background-scroll" role="listbox" aria-label="Select menu background">
                   {backgroundOptions.map((backgroundOption) => (
@@ -812,38 +869,6 @@ const SettingsPage = () => {
                         className="settings-background-image"
                       />
                     </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="settings-option-block">
-                <div className="settings-option-title">Primary Colors</div>
-                <div className="settings-color-chip-row" role="listbox" aria-label="Select primary color">
-                  {USER_PRIMARY_COLOR_OPTIONS.map((colorOption) => (
-                    <button
-                      key={colorOption.id}
-                      type="button"
-                      className={`settings-color-chip${selectedPrimaryColor === colorOption.id ? " settings-color-chip-selected" : ""}`}
-                      style={{ ["--settings-chip-color" as string]: colorOption.hex }}
-                      onClick={() => setSelectedPrimaryColor(colorOption.id)}
-                      aria-label={colorOption.label}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="settings-option-block">
-                <div className="settings-option-title">Text Colors</div>
-                <div className="settings-color-chip-row" role="listbox" aria-label="Select text color">
-                  {USER_TEXT_COLOR_OPTIONS.map((colorOption) => (
-                    <button
-                      key={colorOption.id}
-                      type="button"
-                      className={`settings-color-chip settings-color-chip-text${selectedTextColor === colorOption.id ? " settings-color-chip-selected" : ""}`}
-                      style={{ ["--settings-chip-color" as string]: colorOption.hex }}
-                      onClick={() => setSelectedTextColor(colorOption.id)}
-                      aria-label={colorOption.label}
-                    />
                   ))}
                 </div>
               </div>

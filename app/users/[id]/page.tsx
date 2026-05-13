@@ -839,36 +839,40 @@ const UserProfilePage: React.FC = () => {
                     />
                   </div>
                   <div className="profile-hero-content">
-                    <div className="profile-row">
-                      <span className="profile-key">Username</span>
-                      <span className="profile-value">{user.username ?? "-"}</span>
-                    </div>
                     <div className="profile-bio-block">
                       <div className="profile-bio-head">
                         <span className="profile-key">Bio</span>
+                        {isOwnProfile ? (
+                          <Button
+                            type="default"
+                            size="small"
+                            className="profile-bio-edit-inline-btn"
+                            onClick={() => router.push("/settings")}
+                          >
+                            Edit Profile
+                          </Button>
+                        ) : null}
                       </div>
                       <div className="profile-hero-bio-content">
                         <p className={`profile-bio-text${isDefaultBio ? " profile-bio-text-placeholder" : ""}`}>
                           {shownBio}
                         </p>
                       </div>
-                      {isOwnProfile ? (
-                        <div className="profile-bio-footer">
-                          <Button
-                            type="default"
-                            className="profile-bio-edit-btn"
-                            onClick={() => router.push("/settings")}
-                          >
-                            Edit Profile
-                          </Button>
-                        </div>
-                      ) : null}
                     </div>
                   </div>
                 </div>
                 <div className="profile-row">
-                  <span className="profile-key">Avg Score</span>
-                  <span className="profile-value">{averageScore}</span>
+                  <span className="profile-key">Creation Date</span>
+                  <span className="profile-value">{creationDate}</span>
+                </div>
+                <div className="profile-row">
+                  <span className="profile-key">Rank</span>
+                  <span className="profile-value">{rank}</span>
+                </div>
+                <div className="profile-stat-gap" aria-hidden="true" />
+                <div className="profile-row">
+                  <span className="profile-key">Rounds</span>
+                  <span className="profile-value">{roundsPlayedText}</span>
                 </div>
                 <div className="profile-row">
                   <span className="profile-key">Losses</span>
@@ -876,17 +880,10 @@ const UserProfilePage: React.FC = () => {
                     {losses == null ? "-" : losses}
                   </span>
                 </div>
+                <div className="profile-stat-gap" aria-hidden="true" />
                 <div className="profile-row">
-                  <span className="profile-key">Creation Date</span>
-                  <span className="profile-value">{creationDate}</span>
-                </div>
-                <div className="profile-row">
-                  <span className="profile-key">Overall Rank</span>
-                  <span className="profile-value">{rank}</span>
-                </div>
-                <div className="profile-row">
-                  <span className="profile-key">Rounds</span>
-                  <span className="profile-value">{roundsPlayedText}</span>
+                  <span className="profile-key">Average Score per Round</span>
+                  <span className="profile-value">{averageScore}</span>
                 </div>
                 <div className="profile-row">
                   <span className="profile-key">Rounds Won %</span>

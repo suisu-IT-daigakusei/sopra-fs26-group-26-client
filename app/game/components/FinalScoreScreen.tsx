@@ -134,6 +134,15 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
         };
     }, []);
 
+    const clearPendingConfirm = () => {
+        if (confirmTimerRef.current != null) {
+            window.clearInterval(confirmTimerRef.current);
+            confirmTimerRef.current = null;
+        }
+        setPendingDecision(null);
+        setConfirmCountdown(5);
+    };
+
     const startConfirm = (decision: RematchDecision) => {
         setPendingDecision(decision);
         setConfirmCountdown(5);
@@ -143,9 +152,11 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
         confirmTimerRef.current = window.setInterval(() => {
             setConfirmCountdown((previous) => {
                 if (previous <= 1) {
-                    window.clearInterval(confirmTimerRef.current!);
-                    confirmTimerRef.current = null;
-                    onChooseRematch(decision);
+                    // Timeout should behave like pressing Cancel.
+                    if (confirmTimerRef.current != null) {
+                        window.clearInterval(confirmTimerRef.current);
+                        confirmTimerRef.current = null;
+                    }
                     setPendingDecision(null);
                     return 5;
                 }
@@ -402,12 +413,8 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                                     type="primary"
                                     loading={isSubmittingRematchDecision}
                                     onClick={() => {
-                                        if (confirmTimerRef.current != null) {
-                                            window.clearInterval(confirmTimerRef.current);
-                                            confirmTimerRef.current = null;
-                                        }
                                         onChooseRematch(pendingDecision);
-                                        setPendingDecision(null);
+                                        clearPendingConfirm();
                                     }}
                                 >
                                     Confirm
@@ -415,14 +422,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                                 <Button
                                     type="default"
                                     danger
-                                    onClick={() => {
-                                        if (confirmTimerRef.current != null) {
-                                            window.clearInterval(confirmTimerRef.current);
-                                            confirmTimerRef.current = null;
-                                        }
-                                        setPendingDecision(null);
-                                        setConfirmCountdown(5);
-                                    }}
+                                    onClick={clearPendingConfirm}
                                 >
                                     Cancel
                                 </Button>

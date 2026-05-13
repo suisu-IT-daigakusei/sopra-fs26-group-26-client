@@ -4,6 +4,7 @@ export interface User {
   username: string | null;
   token: string | null;
   status: string | null;
+  isPublicLog?: boolean | null;
   bio: string | null;
   creationDate: string | null;
   gamesWon: number | null;
@@ -20,7 +21,7 @@ export interface User {
   menuBackgroundId?: string | null;
   gameBackgroundId?: string | null;
   primaryColorId?: string | null;
-  textColorId?: string | null;
+  appearanceMode?: string | null;
   tutorialsEnabled?: boolean | null;
   musicVolume?: number | null;
   soundEffectsVolume?: number | null;

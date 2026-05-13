@@ -526,12 +526,44 @@ function isRoundBoundaryMove(actionType: string, details: string): boolean {
   );
 }
 
-function parseSessionMoveLogEntries(payload: unknown): SessionMoveLogEntry[] {
-  if (!Array.isArray(payload)) {
+function extractSessionMoveLogEntriesPayload(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  const root = toPlainRecord(payload);
+  if (!root) {
     return [];
   }
 
-  const extracted = payload
+  const arrayKeys = ["logs", "moves", "entries", "items", "history", "data"];
+  for (const key of arrayKeys) {
+    const candidate = root[key];
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  const nestedData = toPlainRecord(root.data);
+  if (nestedData) {
+    for (const key of ["logs", "moves", "entries", "items", "history"]) {
+      const nestedCandidate = nestedData[key];
+      if (Array.isArray(nestedCandidate)) {
+        return nestedCandidate;
+      }
+    }
+  }
+
+  return [];
+}
+
+function parseSessionMoveLogEntries(payload: unknown): SessionMoveLogEntry[] {
+  const rawEntries = extractSessionMoveLogEntriesPayload(payload);
+  if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
+    return [];
+  }
+
+  const extracted = rawEntries
     .map((entry, index) => {
       const record = toPlainRecord(entry);
       if (!record) {
@@ -814,7 +846,12 @@ const HistoryPage: React.FC = () => {
 
       setRoundMoves(filtered);
       if (filtered.length === 0) {
-        setRoundMovesError(ROUND_MOVES_EMPTY_TEXT);
+        const isOtherPlayer = selfUserId != null && target.userId !== selfUserId;
+        setRoundMovesError(
+          isOtherPlayer
+            ? "This player had move history set to private during this round."
+            : ROUND_MOVES_EMPTY_TEXT,
+        );
       }
     } catch (caughtError) {
       const status = (caughtError as ApplicationError)?.status;
@@ -830,7 +867,7 @@ const HistoryPage: React.FC = () => {
     } finally {
       setRoundMovesLoading(false);
     }
-  }, [apiService, sessionId, sessionSnapshot?.sessionCode, sessionLogEntries, token]);
+  }, [apiService, selfUserId, sessionId, sessionSnapshot?.sessionCode, sessionLogEntries, token]);
 
   const scoreRows = useMemo(() => {
     if (!sessionSnapshot) {

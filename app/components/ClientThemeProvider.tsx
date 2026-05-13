@@ -5,18 +5,20 @@ import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { User } from "@/types/user";
 import {
+  USER_DEFAULT_APPEARANCE_MODE,
   USER_DEFAULT_PRIMARY_COLOR_ID,
-  USER_DEFAULT_TEXT_COLOR_ID,
+  getAppearanceContainerBackgroundHex,
+  getAppearanceTextColorHex,
   getPrimaryColorHex,
-  getTextColorHex,
+  normalizeAppearanceMode,
   normalizePrimaryColorId,
-  normalizeTextColorId,
+  resolveEffectiveAppearance,
 } from "@/utils/userSettings";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const PRIMARY_COLOR_STORAGE_KEY = "primaryColorId";
-const TEXT_COLOR_STORAGE_KEY = "textColorId";
+const APPEARANCE_STORAGE_KEY = "appearanceMode";
 
 type ClientThemeProviderProps = {
   children: React.ReactNode;
@@ -47,10 +49,29 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
     PRIMARY_COLOR_STORAGE_KEY,
     USER_DEFAULT_PRIMARY_COLOR_ID,
   );
-  const { value: storedTextColorId, set: setStoredTextColorId } = useLocalStorage<string>(
-    TEXT_COLOR_STORAGE_KEY,
-    USER_DEFAULT_TEXT_COLOR_ID,
+  const { value: storedAppearanceMode, set: setStoredAppearanceMode } = useLocalStorage<string>(
+    APPEARANCE_STORAGE_KEY,
+    USER_DEFAULT_APPEARANCE_MODE,
   );
+  const [prefersSystemDark, setPrefersSystemDark] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setPrefersSystemDark(mediaQuery.matches);
+    apply();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", apply);
+      return () => mediaQuery.removeEventListener("change", apply);
+    }
+
+    mediaQuery.addListener(apply);
+    return () => mediaQuery.removeListener(apply);
+  }, []);
 
   useEffect(() => {
     const authToken = token.trim();
@@ -71,7 +92,7 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
           return;
         }
         setStoredPrimaryColorId(normalizePrimaryColorId(fetchedUser?.primaryColorId));
-        setStoredTextColorId(normalizeTextColorId(fetchedUser?.textColorId));
+        setStoredAppearanceMode(normalizeAppearanceMode(fetchedUser?.appearanceMode));
       } catch {
         // keep current local values on transient fetch failures
       }
@@ -82,25 +103,31 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
     return () => {
       active = false;
     };
-  }, [api, setStoredPrimaryColorId, setStoredTextColorId, token, userId]);
+  }, [api, setStoredAppearanceMode, setStoredPrimaryColorId, token, userId]);
 
   const isAuthenticated = token.trim().length > 0 && userId.trim().length > 0;
   const isAuthScreen = pathname === "/login" || pathname === "/register";
   const normalizedPrimaryColorId = normalizePrimaryColorId(storedPrimaryColorId);
-  const normalizedTextColorId = normalizeTextColorId(storedTextColorId);
-  const hasCustomTheme =
-    normalizedPrimaryColorId !== USER_DEFAULT_PRIMARY_COLOR_ID ||
-    normalizedTextColorId !== USER_DEFAULT_TEXT_COLOR_ID;
-  const useUserTheme = isAuthenticated && !isAuthScreen && hasCustomTheme;
-  const useDarkTextTheme = useUserTheme && normalizedTextColorId === "dark";
+  const normalizedAppearanceMode = normalizeAppearanceMode(storedAppearanceMode);
+  const useUserTheme = isAuthenticated && !isAuthScreen;
+  const effectiveAppearance = resolveEffectiveAppearance(normalizedAppearanceMode, prefersSystemDark);
+  const useLightAppearance = useUserTheme && effectiveAppearance === "light";
   const primaryColorHex = useUserTheme
     ? getPrimaryColorHex(normalizedPrimaryColorId)
     : DEFAULT_PUBLIC_PRIMARY_COLOR_HEX;
   const primaryHoverColorHex = darkenHexColor(primaryColorHex, 0.84);
   const textColorHex = useUserTheme
-    ? getTextColorHex(normalizedTextColorId)
+    ? getAppearanceTextColorHex(normalizedAppearanceMode, prefersSystemDark)
     : DEFAULT_PUBLIC_TEXT_COLOR_HEX;
-  const containerBackgroundHex = useDarkTextTheme ? "#f7f8fa" : "#16181D";
+  const containerBackgroundHex = useUserTheme
+    ? getAppearanceContainerBackgroundHex(normalizedAppearanceMode, prefersSystemDark)
+    : "#16181D";
+  useEffect(() => {
+    if (!useUserTheme || typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(APPEARANCE_STORAGE_KEY, normalizedAppearanceMode);
+  }, [normalizedAppearanceMode, useUserTheme]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -109,11 +136,12 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
     document.documentElement.style.setProperty("--cabo-primary-color", primaryColorHex);
     document.documentElement.style.setProperty("--cabo-primary-hover-color", primaryHoverColorHex);
     document.documentElement.style.setProperty("--cabo-text-color", textColorHex);
-    document.documentElement.classList.toggle("cabo-text-dark", useDarkTextTheme);
+    document.documentElement.classList.toggle("cabo-text-dark", useLightAppearance);
+    document.documentElement.style.setProperty("--cabo-appearance-mode", useLightAppearance ? "light" : "dark");
     return () => {
       document.documentElement.classList.remove("cabo-text-dark");
     };
-  }, [primaryColorHex, primaryHoverColorHex, textColorHex, useDarkTextTheme]);
+  }, [primaryColorHex, primaryHoverColorHex, textColorHex, useLightAppearance]);
 
   const antdTheme = useMemo(
     () => ({
@@ -136,9 +164,9 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
           controlHeight: 38,
         },
         Input: {
-          colorBorder: useDarkTextTheme ? "#a7afba" : "gray",
+          colorBorder: useLightAppearance ? "#a7afba" : "gray",
           colorBgContainer: containerBackgroundHex,
-          colorTextPlaceholder: useDarkTextTheme ? "#616c7d" : "#888888",
+          colorTextPlaceholder: useLightAppearance ? "#616c7d" : "#888888",
           algorithm: false,
         },
         Form: {
@@ -148,7 +176,7 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
         Card: {},
       },
     }),
-    [containerBackgroundHex, primaryColorHex, textColorHex, useDarkTextTheme],
+    [containerBackgroundHex, primaryColorHex, textColorHex, useLightAppearance],
   );
 
   return (

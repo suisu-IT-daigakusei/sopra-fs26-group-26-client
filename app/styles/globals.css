@@ -544,6 +544,10 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   align-items: center;
 }
 
+.profile-stat-gap {
+  height: 8px;
+}
+
 .profile-key {
   color: var(--cabo-primary-color);
   font-weight: 700;
@@ -563,57 +567,24 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
 
 .profile-bio-head {
   display: flex;
-  justify-content: flex-start;
-  align-items: center;
+  justify-content: space-between;
+  align-items: baseline;
   gap: 12px;
 }
 
-.profile-bio-head-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.profile-bio-inline-btn.ant-btn {
-  min-height: 0 !important;
-  height: calc(1em + 2px) !important;
-  line-height: 1 !important;
-  font-size: 14px !important;
-  padding: 0 0.45em !important;
-  border-radius: 4px !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-
-.profile-bio-edit-btn.ant-btn {
+.profile-bio-edit-inline-btn.ant-btn {
   color: #ffffff !important;
   border-color: rgba(255, 255, 255, 0.36) !important;
   background-color: rgba(43, 125, 233, 0.35) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 8px !important;
+  line-height: 1.1 !important;
+  font-size: inherit !important;
 }
 
-.profile-bio-edit-btn.ant-btn:hover {
+.profile-bio-edit-inline-btn.ant-btn:hover {
   background-color: rgba(43, 125, 233, 0.52) !important;
-}
-
-.profile-bio-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 100%;
-}
-
-.profile-bio-editor .ant-input-textarea .ant-input {
-  max-height: calc(var(--profile-avatar-size) - 38px);
-  overflow-y: auto;
-  resize: none;
-}
-
-.profile-bio-actions {
-  display: inline-flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 6px;
 }
 
 .profile-bio-text {
@@ -628,11 +599,6 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
 .profile-bio-text-placeholder {
   color: color-mix(in srgb, var(--cabo-text-color) 58%, #aab3bf);
   font-style: italic;
-}
-
-.profile-bio-footer {
-  display: flex;
-  justify-content: flex-end;
 }
 
 .profile-results-filters {
@@ -785,7 +751,7 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
 
 .history-results-hint {
   margin: 0 0 10px;
-  color: #cfd8e2;
+  color: color-mix(in srgb, var(--cabo-text-color) 85%, #aab3bf);
   font-style: italic;
 }
 
@@ -951,6 +917,62 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   padding-bottom: 0;
 }
 
+.settings-appearance-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.settings-appearance-dot-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(18, 24, 34, 0.34);
+  color: var(--cabo-text-color);
+  padding: 6px 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.settings-appearance-dot-btn:hover {
+  border-color: color-mix(in srgb, var(--cabo-primary-color) 72%, #ffffff);
+}
+
+.settings-appearance-dot-btn-selected {
+  border-color: var(--cabo-primary-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cabo-primary-color) 28%, transparent);
+}
+
+.settings-appearance-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #f2f2f2;
+  box-shadow: inset 0 0 0 1px rgba(15, 20, 28, 0.35);
+}
+
+.settings-appearance-dot-btn-system .settings-appearance-dot {
+  background: linear-gradient(90deg, #f7f8fa 50%, #16181d 50%);
+}
+
+.settings-appearance-dot-btn-light .settings-appearance-dot {
+  background: #f7f8fa;
+}
+
+.settings-appearance-dot-btn-dark .settings-appearance-dot {
+  background: #16181d;
+  box-shadow: inset 0 0 0 1px rgba(226, 231, 239, 0.35);
+}
+
+html.cabo-text-dark .settings-appearance-dot-btn {
+  background: rgba(240, 244, 250, 0.7);
+  border-color: rgba(117, 128, 143, 0.68);
+}
+
 .settings-character-scroll::-webkit-scrollbar,
 .settings-background-scroll::-webkit-scrollbar,
 .settings-color-chip-row::-webkit-scrollbar {
@@ -1076,6 +1098,7 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   color: var(--cabo-text-color);
   font-size: 14px;
   line-height: 1.35;
+  font-style: italic;
 }
 
 .settings-priority-select:hover .ant-select-selector {
@@ -1182,12 +1205,6 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   background: var(--settings-chip-color);
   cursor: pointer;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.34);
-}
-
-.settings-color-chip-text {
-  box-shadow:
-    inset 0 0 0 1px rgba(0, 0, 0, 0.58),
-    0 2px 6px rgba(0, 0, 0, 0.34);
 }
 
 .settings-color-chip-selected {
@@ -1701,25 +1718,6 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.lobby-ready-bar {
-  width: 4px;
-  height: 1em;
-  border-radius: 999px;
-  flex: 0 0 auto;
-}
-
-.lobby-ready-bar-ready {
-  background: #2f9e44;
-}
-
-.lobby-ready-bar-not-ready {
-  background: #c0392b;
-}
-
-.lobby-ready-bar-empty {
-  background: rgba(170, 180, 192, 0.55);
 }
 
 .lobby-slot-status-pill {
@@ -2492,11 +2490,6 @@ body.cabo-reconnect-active .cabo-invite-corner {
   text-align: left;
 }
 
-.final-score-col-delta {
-  width: 42px;
-  padding-inline: 4px;
-}
-
 .final-score-col-total {
   width: 132px;
 }
@@ -2810,6 +2803,11 @@ body.cabo-reconnect-active .cabo-invite-corner {
 
 .game-intro-title {
   margin: 0;
+  padding: 10px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(10, 14, 22, 0.52);
+  backdrop-filter: blur(4px);
   color: #f5efe8;
   font-size: clamp(34px, 6.4vw, 62px);
   font-weight: 800;
@@ -2895,25 +2893,23 @@ body.cabo-reconnect-active .cabo-invite-corner {
   border-radius: inherit;
 }
 
-.game-intro-player-avatar-initial {
-  color: rgba(255, 255, 255, 0.95);
-  font-size: 48px;
-  font-weight: 800;
-  line-height: 1;
-  text-shadow: 0 3px 10px rgba(0, 0, 0, 0.34);
-}
-
 .game-intro-player-name,
 .game-intro-player-score {
   margin: 0;
   width: 100%;
   text-align: center;
+  background: rgba(10, 14, 22, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  backdrop-filter: blur(4px);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.56);
 }
 
 .game-intro-player-name {
   color: #f0eee9;
   font-size: 15px;
   font-weight: 700;
+  padding: 5px 8px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2924,6 +2920,7 @@ body.cabo-reconnect-active .cabo-invite-corner {
   color: #e4cf99;
   font-size: 20px;
   font-weight: 800;
+  padding: 6px 8px;
   line-height: 1;
   letter-spacing: 0.02em;
 }
@@ -2939,7 +2936,7 @@ body.cabo-reconnect-active .cabo-invite-corner {
   }
 }
 
-/* more a placeholder for game clarification ... is necessary, but needs propar implmentation */
+/* Player list shown in top-left during game */
 .game-player-list {
   position: absolute;
   top: 14px;

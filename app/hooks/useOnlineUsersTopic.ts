@@ -43,7 +43,7 @@ function parseOnlineUsersJson(body: string): User[] {
       menuBackgroundId: (o.menuBackgroundId as string) ?? null,
       gameBackgroundId: (o.gameBackgroundId as string) ?? null,
       primaryColorId: (o.primaryColorId as string) ?? null,
-      textColorId: (o.textColorId as string) ?? null,
+      appearanceMode: (o.appearanceMode as string) ?? null,
       musicVolume: (o.musicVolume as number) ?? null,
       soundEffectsVolume: (o.soundEffectsVolume as number) ?? null,
       musicBlacklist: Array.isArray(o.musicBlacklist)

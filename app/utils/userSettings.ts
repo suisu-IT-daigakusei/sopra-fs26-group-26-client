@@ -35,16 +35,18 @@ export const USER_PRIMARY_COLOR_OPTIONS = [
   { id: "dark_green", hex: "#2f7f49", label: "Dark Green" },
   { id: "light_green", hex: "#78c75c", label: "Light Green" },
   { id: "yellow", hex: "#e0c13b", label: "Yellow" },
-  { id: "orange", hex: "#ef8a2e", label: "Orange" },
+  { id: "orange", hex: "#e8a87c", label: "Orange" },
   { id: "red", hex: "#d75e5e", label: "Red" },
   { id: "pink", hex: "#e06aa8", label: "Pink" },
   { id: "purple", hex: "#8a5fc8", label: "Purple" },
 ] as const;
 
-export const USER_TEXT_COLOR_OPTIONS = [
-  { id: "white", hex: "#f2f2f2", label: "White" },
-  { id: "dark", hex: "#1e2329", label: "Dark" },
+export const USER_APPEARANCE_OPTIONS = [
+  { id: "system", label: "System" },
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
 ] as const;
+export type UserAppearanceMode = (typeof USER_APPEARANCE_OPTIONS)[number]["id"];
 
 export const USER_BACKGROUND_PLACEHOLDER_FILE = "background_placeholder.png";
 export const USER_DEFAULT_BACKGROUND_FILE = "background_01.png";
@@ -56,13 +58,12 @@ export const USER_DEFAULT_CHARACTER_ID = USER_PROFILE_CHARACTER_OPTIONS[0].id;
 export const USER_DEFAULT_MENU_BACKGROUND_ID = USER_DEFAULT_BACKGROUND_FILE;
 export const USER_DEFAULT_GAME_BACKGROUND_ID = USER_DEFAULT_BACKGROUND_FILE;
 export const USER_DEFAULT_PRIMARY_COLOR_ID = "orange";
-export const USER_DEFAULT_TEXT_COLOR_ID = USER_TEXT_COLOR_OPTIONS[0].id;
+export const USER_DEFAULT_APPEARANCE_MODE: UserAppearanceMode = "system";
 export const USER_DEFAULT_MUSIC_VOLUME = 60;
 export const USER_DEFAULT_SOUND_EFFECTS_VOLUME = 70;
 
 const CHARACTER_IDS = new Set<string>(USER_PROFILE_CHARACTER_OPTIONS.map((entry) => entry.id));
 const PRIMARY_COLOR_IDS = new Set<string>(USER_PRIMARY_COLOR_OPTIONS.map((entry) => entry.id));
-const TEXT_COLOR_IDS = new Set<string>(USER_TEXT_COLOR_OPTIONS.map((entry) => entry.id));
 const PRIORITY_COLOR_IDS = new Set<string>(USER_PRIORITY_COLOR_OPTIONS);
 const LEGACY_COLOR_ALIASES: Record<string, string> = {
   black: "navy_blue",
@@ -149,15 +150,37 @@ export function getPrimaryColorHex(primaryColorId: unknown): string {
   return match?.hex ?? USER_PRIMARY_COLOR_OPTIONS[0].hex;
 }
 
-export function normalizeTextColorId(raw: unknown): string {
+export function normalizeAppearanceMode(raw: unknown): UserAppearanceMode {
   const normalized = normalizeValue(raw);
-  return TEXT_COLOR_IDS.has(normalized) ? normalized : USER_DEFAULT_TEXT_COLOR_ID;
+  if (normalized === "light" || normalized === "dark" || normalized === "system") {
+    return normalized;
+  }
+  return USER_DEFAULT_APPEARANCE_MODE;
 }
 
-export function getTextColorHex(textColorId: unknown): string {
-  const normalized = normalizeTextColorId(textColorId);
-  const match = USER_TEXT_COLOR_OPTIONS.find((entry) => entry.id === normalized);
-  return match?.hex ?? USER_TEXT_COLOR_OPTIONS[0].hex;
+export function appearanceModeToStorageValue(mode: unknown): string {
+  return normalizeAppearanceMode(mode);
+}
+
+export function resolveEffectiveAppearance(
+  mode: unknown,
+  prefersDark: boolean,
+): "light" | "dark" {
+  const normalizedMode = normalizeAppearanceMode(mode);
+  if (normalizedMode === "system") {
+    return prefersDark ? "dark" : "light";
+  }
+  return normalizedMode;
+}
+
+export function getAppearanceTextColorHex(mode: unknown, prefersDark: boolean): string {
+  const effective = resolveEffectiveAppearance(mode, prefersDark);
+  return effective === "light" ? "#1e2329" : "#f2f2f2";
+}
+
+export function getAppearanceContainerBackgroundHex(mode: unknown, prefersDark: boolean): string {
+  const effective = resolveEffectiveAppearance(mode, prefersDark);
+  return effective === "light" ? "#f7f8fa" : "#16181d";
 }
 
 export function normalizeVolume(raw: unknown, fallback: number): number {
