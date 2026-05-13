@@ -181,7 +181,9 @@ reason).
 | **@aleexgort**| 12.05.2025| (https://github.com/liun777/sopra-fs26-group-26-client/commit/4b10b49363014593f1f351b48c105880527a29d1)| Added a new condition in the results card that if gamesPlayed === 0 the table with the results is not shown but rather we get a message the no games have been played yet.  |Adds more clarity we dont have an empty table anymore. Improved UX. |
 | **@aleexgort**| 12.05.2025| (https://github.com/liun777/sopra-fs26-group-26-client/commit/a56f46eae1f89a99fbc927cd490b804a7deefa26)| In the FinalScoreScreeen added a new component in the confirm modal with a countdown. | This way there is some more decision time there for the user, if they make a mistake they can still change their mind for a short period of time before if you just impusively clicked something you were stuck with that decision.|
 | **@aleexgort**| 12.05.2025| (https://github.com/liun777/sopra-fs26-group-26-client/commit/ebee998d0bd7291391fd3cf9f16e7175cdb5368d)| Added a second websocket subsciption to  /user/queue/redirect that automatically brings players to a lobby once a new sessionId is received.| This way the client doesnt need to repeatedly poll the server and the redirection happensimmediately as soon as the server triggers it. |
-
+| **suisu-IT-daigakusei** | 12.05.2026 | https://github.com/liun777/sopra-fs26-group-26-client/commit/19d65c4bb807eb7c194f9fb5236dec0304b055bc | #52 Implementation 1.0| Users' stats work now |
+| **suisu-IT-daigakusei** | 12.05.2026 | https://github.com/liun777/sopra-fs26-group-26-server/commit/34541227d3a5c7eb2ded0d507b1af99b419fdfa9 | #51 Implementation 1.0 | Profile page is connected to backend |
+| **suisu-IT-daigakusei** | 12.05.2026 | https://github.com/liun777/sopra-fs26-group-26-client/commit/3476401bb21d38ddc422b347f42df20557029417](https://github.com/liun777/sopra-fs26-group-26-server/commit/48e1d4e3288ef027685f677fd8bcd420bc8b790c | User Settings Implementation: Implemented most user settings, also in the backend | Edit bio, avatars, colors, dark mode, background images, etc. all essentials for a decent UX |
 
 
 ## Contributions Week 8 - [13.05.2026] to [19.05.2026]
