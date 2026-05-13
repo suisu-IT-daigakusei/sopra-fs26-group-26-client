@@ -49,7 +49,7 @@ export const USER_APPEARANCE_OPTIONS = [
 export type UserAppearanceMode = (typeof USER_APPEARANCE_OPTIONS)[number]["id"];
 
 export const USER_BACKGROUND_PLACEHOLDER_FILE = "background_placeholder.png";
-export const USER_DEFAULT_BACKGROUND_FILE = "background_01.png";
+export const USER_DEFAULT_BACKGROUND_FILE = "background_01.jpg";
 export const USER_DEFAULT_BACKGROUND_OPTIONS: BackgroundOption[] = [
   { id: USER_DEFAULT_BACKGROUND_FILE, src: `/${USER_DEFAULT_BACKGROUND_FILE}`, label: "Background 01" },
 ];
@@ -95,17 +95,17 @@ function toBackgroundFile(raw: unknown): string {
   if (!normalized) {
     return "";
   }
-  if (normalized.startsWith("background_") && normalized.endsWith(".png")) {
+  if (normalized.startsWith("background_") && /\.(?:png|jpe?g)$/.test(normalized)) {
     return normalized;
   }
   if (normalized.startsWith("background_")) {
-    return `${normalized}.png`;
+    return `${normalized}.jpg`;
   }
   const legacyMatch = /^(?:menu|game)-bg-(\d+)$/.exec(normalized);
   if (legacyMatch) {
     const numeric = Number(legacyMatch[1]);
     if (Number.isFinite(numeric)) {
-      return `background_${String(numeric).padStart(2, "0")}.png`;
+      return `background_${String(numeric).padStart(2, "0")}.jpg`;
     }
   }
   return normalized;
@@ -121,6 +121,16 @@ export function resolveBackgroundFile(raw: unknown, availableFiles?: Iterable<st
   }
   if (preferred && normalizedAvailable.has(preferred)) {
     return preferred;
+  }
+  const preferredBaseMatch = /^background_(\d+)\.(?:png|jpe?g)$/.exec(preferred);
+  if (preferredBaseMatch) {
+    const preferredBase = `background_${preferredBaseMatch[1]}`;
+    for (const extension of ["jpg", "jpeg", "png"]) {
+      const candidate = `${preferredBase}.${extension}`;
+      if (normalizedAvailable.has(candidate)) {
+        return candidate;
+      }
+    }
   }
   if (normalizedAvailable.has(USER_BACKGROUND_PLACEHOLDER_FILE)) {
     return USER_BACKGROUND_PLACEHOLDER_FILE;

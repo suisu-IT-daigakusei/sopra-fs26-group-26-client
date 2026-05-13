@@ -29,14 +29,14 @@ type ShuffleCardComputed = ShuffleCardSpec & {
 };
 
 const BASE_SHUFFLE_CARDS: ShuffleCardSpec[] = [
-  { imagePath: "/card2.png", side: "left", stack: 0, riffleSlot: 0, delaySec: 0 },
-  { imagePath: "/card7.png", side: "left", stack: 1, riffleSlot: 2, delaySec: -0.08 },
-  { imagePath: "/card11.png", side: "left", stack: 2, riffleSlot: 4, delaySec: -0.16 },
-  { imagePath: "/card1.png", side: "left", stack: 3, riffleSlot: 6, delaySec: -0.24 },
-  { imagePath: "/card4.png", side: "right", stack: 0, riffleSlot: 1, delaySec: -0.04 },
-  { imagePath: "/card9.png", side: "right", stack: 1, riffleSlot: 3, delaySec: -0.12 },
-  { imagePath: "/card13.png", side: "right", stack: 2, riffleSlot: 5, delaySec: -0.2 },
-  { imagePath: "/card6.png", side: "right", stack: 3, riffleSlot: 7, delaySec: -0.28 },
+  { imagePath: "/card2.jpg", side: "left", stack: 0, riffleSlot: 0, delaySec: 0 },
+  { imagePath: "/card7.jpg", side: "left", stack: 1, riffleSlot: 2, delaySec: -0.08 },
+  { imagePath: "/card11.jpg", side: "left", stack: 2, riffleSlot: 4, delaySec: -0.16 },
+  { imagePath: "/card1.jpg", side: "left", stack: 3, riffleSlot: 6, delaySec: -0.24 },
+  { imagePath: "/card4.jpg", side: "right", stack: 0, riffleSlot: 1, delaySec: -0.04 },
+  { imagePath: "/card9.jpg", side: "right", stack: 1, riffleSlot: 3, delaySec: -0.12 },
+  { imagePath: "/card13.jpg", side: "right", stack: 2, riffleSlot: 5, delaySec: -0.2 },
+  { imagePath: "/card6.jpg", side: "right", stack: 3, riffleSlot: 7, delaySec: -0.28 },
 ];
 
 function toComputedCard(spec: ShuffleCardSpec): ShuffleCardComputed {

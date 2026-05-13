@@ -7,7 +7,7 @@ import {
   type BackgroundOption,
 } from "@/utils/userSettings";
 
-const BACKGROUND_FILE_PATTERN = /^background_(\d+)\.png$/i;
+const BACKGROUND_FILE_PATTERN = /^background_(\d+)\.jpe?g$/i;
 
 function toBackgroundLabel(fileName: string): string {
   const match = BACKGROUND_FILE_PATTERN.exec(fileName);

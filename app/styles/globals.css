@@ -5,7 +5,7 @@
   --background: #ffffff;
   --foreground: #171717;
   --app-page-max-width: 1040px;
-  --cabo-menu-background-image: url('/background_01.png');
+  --cabo-menu-background-image: url('/background_01.jpg');
   --cabo-game-background-image: var(--cabo-menu-background-image);
   --cabo-primary-color: #e8a87c;
   --cabo-primary-hover-color: #c4827a;
@@ -2993,7 +2993,7 @@ body.cabo-reconnect-active .cabo-invite-corner {
 
 /* Generic card styles */
 .card {
-  background-image: url("/cards.png");
+  background-image: url("/cards.jpg");
   background-size: cover;
   background-position: center;
   aspect-ratio: 5 / 7;

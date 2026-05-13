@@ -17,9 +17,9 @@ interface CardProps {
   onDragLeave?: React.DragEventHandler<HTMLDivElement>;
 }
 
-// get the correct oath of the png's
+// get the correct path for card face images
 const getCardImagePath = (value: number): string => {
-  return `/card${value}.png`;
+  return `/card${value}.jpg`;
 };
 
 const FLIP_ANIMATION_MS = 280;
@@ -96,7 +96,7 @@ const CardComponent: React.FC<CardProps> = ({
 
 // card backsides
   if (hidden) {
-    // card back — uses the existing .card CSS class with cards.png background
+    // card back — uses the existing .card CSS class with cards.jpg background
     return (
       <div
         className={cardClassName}

@@ -87,10 +87,98 @@ function readBuildInfoFromEnvCandidates(
   return { commitId, date, time };
 }
 
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function getBackendApiBaseUrl(): string {
+  const explicitUrl = String(process.env.NEXT_PUBLIC_API_URL ?? "").trim();
+  if (explicitUrl) {
+    return normalizeBaseUrl(explicitUrl);
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    const prodUrl = String(process.env.NEXT_PUBLIC_PROD_API_URL ?? "").trim();
+    if (prodUrl) {
+      return normalizeBaseUrl(prodUrl);
+    }
+    return "https://scientific-crow-494106-c4.oa.r.appspot.com";
+  }
+
+  return "http://localhost:8080";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function toBuildInfo(value: unknown): BuildInfo {
+  const record = asRecord(value);
+  if (!record) {
+    return toUnknownBuildInfo();
+  }
+
+  const commitId = String(record.commitId ?? "").trim();
+  if (!commitId) {
+    return toUnknownBuildInfo();
+  }
+
+  const date = String(record.date ?? "").trim() || "--------";
+  const time = String(record.time ?? "").trim() || "--:--";
+  return { commitId, date, time };
+}
+
+function extractServerBuildInfoPayload(payload: unknown): unknown {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+
+  if ("commitId" in record || "date" in record || "time" in record) {
+    return record;
+  }
+
+  if ("server" in record) {
+    return record.server;
+  }
+
+  return null;
+}
+
+async function readServerBuildInfoFromBackend(apiBaseUrl: string): Promise<BuildInfo> {
+  const timeoutController = new AbortController();
+  const timeoutHandle = setTimeout(() => timeoutController.abort(), 2000);
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/build-info`, {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+      },
+      signal: timeoutController.signal,
+    });
+    if (!response.ok) {
+      return toUnknownBuildInfo();
+    }
+
+    const payload = await response.json() as unknown;
+    return toBuildInfo(extractServerBuildInfoPayload(payload));
+  } catch {
+    return toUnknownBuildInfo();
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 export async function GET() {
   const clientRepoPath = process.cwd();
   const defaultServerRepoPath = path.resolve(process.cwd(), "..", "sopra-fs26-group-26-server");
   const serverRepoPath = process.env.CABO_SERVER_REPO_PATH || defaultServerRepoPath;
+  const backendApiBaseUrl = getBackendApiBaseUrl();
 
   const clientFromEnv = readBuildInfoFromEnvCandidates(
     [
@@ -116,14 +204,18 @@ export async function GET() {
       "CABO_SERVER_GIT_COMMIT_TIMESTAMP",
     ],
   );
-
-  const [clientFromGit, serverFromGit] = await Promise.all([
+  const [clientFromGit, serverFromGit, serverFromBackend] = await Promise.all([
     readBuildInfo(clientRepoPath),
     readBuildInfo(serverRepoPath),
+    readServerBuildInfoFromBackend(backendApiBaseUrl),
   ]);
 
   const resolvedClient = isKnownBuildInfo(clientFromEnv) ? clientFromEnv : clientFromGit;
-  const resolvedServer = isKnownBuildInfo(serverFromEnv) ? serverFromEnv : serverFromGit;
+  const resolvedServer = isKnownBuildInfo(serverFromEnv)
+    ? serverFromEnv
+    : isKnownBuildInfo(serverFromBackend)
+      ? serverFromBackend
+      : serverFromGit;
 
   if (isKnownBuildInfo(resolvedClient) || isKnownBuildInfo(resolvedServer)) {
     return NextResponse.json(

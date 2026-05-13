@@ -42,3 +42,8 @@ jobs:
           platforms: linux/amd64
           cache-from: type=registry,ref=${{secrets.dockerhub_username}}/${{secrets.dockerhub_repo_name}}:cache
           cache-to: type=inline,mode=max
+          build-args: |
+            CABO_CLIENT_BUILD_COMMIT_ID=${{ github.sha }}
+            CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${{ github.event.head_commit.timestamp }}
+            CABO_SERVER_BUILD_COMMIT_ID=${{ vars.CABO_SERVER_BUILD_COMMIT_ID }}
+            CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${{ vars.CABO_SERVER_BUILD_COMMIT_TIMESTAMP }}

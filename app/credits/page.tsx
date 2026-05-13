@@ -22,11 +22,11 @@ const UNKNOWN_BUILD_INFO: BuildInfo = {
 };
 
 const CREDIT_NAMES = [
-  "Name 1 (Placeholder)",
-  "Name 2 (Placeholder)",
-  "Name 3 (Placeholder)",
-  "Name 4 (Placeholder)",
-  "Name 5 (Placeholder)",
+  "@janagraf",
+  "@aleexgort",
+  "@uIiana",
+  "@liun777",
+  "@suisu-IT-daigakusei (Jan)",
   "",
   "Audio Sources:",
   "pixabay.com",
