@@ -68,19 +68,23 @@ function isKnownBuildInfo(buildInfo: BuildInfo): boolean {
   return buildInfo.commitId !== "unknown";
 }
 
-function readBuildInfoFromEnv(commitIdEnv: string, timestampEnv: string): BuildInfo {
-  const commitId = String(process.env[commitIdEnv] ?? "").trim();
+function readBuildInfoFromEnvCandidates(
+  commitEnvCandidates: string[],
+  timestampEnvCandidates: string[],
+): BuildInfo {
+  const commitId = commitEnvCandidates
+    .map((key) => String(process.env[key] ?? "").trim())
+    .find((value) => value.length > 0);
   if (!commitId) {
     return toUnknownBuildInfo();
   }
 
-  const timestampRaw = String(process.env[timestampEnv] ?? "").trim();
+  const timestampRaw = timestampEnvCandidates
+    .map((key) => String(process.env[key] ?? "").trim())
+    .find((value) => value.length > 0) ?? "";
   const { date, time } = formatBuildDateParts(timestampRaw);
-  return {
-    commitId,
-    date,
-    time,
-  };
+
+  return { commitId, date, time };
 }
 
 export async function GET() {
@@ -88,13 +92,29 @@ export async function GET() {
   const defaultServerRepoPath = path.resolve(process.cwd(), "..", "sopra-fs26-group-26-server");
   const serverRepoPath = process.env.CABO_SERVER_REPO_PATH || defaultServerRepoPath;
 
-  const clientFromEnv = readBuildInfoFromEnv(
-    "CABO_CLIENT_BUILD_COMMIT_ID",
-    "CABO_CLIENT_BUILD_COMMIT_TIMESTAMP",
+  const clientFromEnv = readBuildInfoFromEnvCandidates(
+    [
+      "CABO_CLIENT_BUILD_COMMIT_ID",
+      "VERCEL_GIT_COMMIT_SHA",
+      "GITHUB_SHA",
+      "CI_COMMIT_SHA",
+    ],
+    [
+      "CABO_CLIENT_BUILD_COMMIT_TIMESTAMP",
+      "VERCEL_GIT_COMMIT_TIMESTAMP",
+      "GITHUB_EVENT_HEAD_COMMIT_TIMESTAMP",
+      "CI_COMMIT_TIMESTAMP",
+    ],
   );
-  const serverFromEnv = readBuildInfoFromEnv(
-    "CABO_SERVER_BUILD_COMMIT_ID",
-    "CABO_SERVER_BUILD_COMMIT_TIMESTAMP",
+  const serverFromEnv = readBuildInfoFromEnvCandidates(
+    [
+      "CABO_SERVER_BUILD_COMMIT_ID",
+      "CABO_SERVER_GIT_COMMIT_SHA",
+    ],
+    [
+      "CABO_SERVER_BUILD_COMMIT_TIMESTAMP",
+      "CABO_SERVER_GIT_COMMIT_TIMESTAMP",
+    ],
   );
 
   const [clientFromGit, serverFromGit] = await Promise.all([

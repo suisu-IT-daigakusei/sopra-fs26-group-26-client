@@ -25,8 +25,17 @@ RUN node --no-opt --max-old-space-size=4096 ./node_modules/next/dist/bin/next bu
 
 # Use small production image
 FROM node:20-alpine
+# Optional build metadata overrides (must also exist in runtime stage)
+ARG CABO_CLIENT_BUILD_COMMIT_ID
+ARG CABO_CLIENT_BUILD_COMMIT_TIMESTAMP
+ARG CABO_SERVER_BUILD_COMMIT_ID
+ARG CABO_SERVER_BUILD_COMMIT_TIMESTAMP
 # Set the env to "production"
 ENV NODE_ENV=production
+ENV CABO_CLIENT_BUILD_COMMIT_ID=${CABO_CLIENT_BUILD_COMMIT_ID}
+ENV CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${CABO_CLIENT_BUILD_COMMIT_TIMESTAMP}
+ENV CABO_SERVER_BUILD_COMMIT_ID=${CABO_SERVER_BUILD_COMMIT_ID}
+ENV CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${CABO_SERVER_BUILD_COMMIT_TIMESTAMP}
 # Set container working directory to /app
 WORKDIR /app
 # Set npm cache to a directory the non-root user can access
