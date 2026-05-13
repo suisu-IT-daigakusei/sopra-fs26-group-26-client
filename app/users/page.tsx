@@ -11,7 +11,8 @@ import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import { derivePlayedStatsFromHistoryPayload, UserHistoryPlayedStats } from "@/utils/userHistoryStats";
-import { Button, Card, Input, Table } from "antd";
+import { LoadingOutlined } from "@ant-design/icons";
+import { Button, Card, Checkbox, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
 type UserRow = User & {
@@ -26,13 +27,31 @@ type UserRow = User & {
   overallRankValue: number | null;
   presenceLabel: string;
   presenceKey: PresenceKey;
+  canAddFriend: boolean;
+  canRemoveFriend: boolean;
+  friendButtonLoading: boolean;
+  onAddFriend: (() => void) | null;
+  onRemoveFriend: (() => void) | null;
 };
 
 const USERS_PAGE_SIZE = 10;
+const FRIEND_ACTION_MIN_LOADING_MS = 800;
+const FRIEND_REQUEST_STATUS_POLL_MS = 4000;
 
 function toFiniteMetric(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function keepLoadingVisible(startedAtMs: number) {
+  const elapsedMs = Date.now() - startedAtMs;
+  const remainingMs = FRIEND_ACTION_MIN_LOADING_MS - elapsedMs;
+  if (remainingMs <= 0) {
+    return;
+  }
+  await new Promise((resolve) => {
+    setTimeout(resolve, remainingMs);
+  });
 }
 
 const columns: TableProps<UserRow>["columns"] = [
@@ -101,13 +120,64 @@ const columns: TableProps<UserRow>["columns"] = [
     className: "users-status-col",
     sorter: (a, b) => a.presenceLabel.localeCompare(b.presenceLabel),
     sortDirections: ["ascend", "descend"],
-    render: (_, row) => (
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <span className={`users-status-pill users-status-${row.presenceKey}`}>
-          {row.presenceLabel}
-        </span>
-      </div>
-    ),
+    render: (_, row) => {
+      const actionLabel = row.canAddFriend
+        ? "Add Friend"
+        : row.canRemoveFriend
+          ? "Remove Friend"
+          : "Friend Request Sent";
+      return (
+        <div className="users-status-action">
+          <span className={`users-status-pill users-status-${row.presenceKey}`}>
+            {row.presenceLabel}
+          </span>
+          {row.canRemoveFriend ? (
+            <Button
+              type="default"
+              className="users-friend-remove-btn"
+              title={actionLabel}
+              aria-label={actionLabel}
+              disabled={!row.canRemoveFriend || row.friendButtonLoading}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (row.friendButtonLoading) {
+                  return;
+                }
+                void row.onRemoveFriend?.();
+              }}
+            >
+              {row.friendButtonLoading ? (
+                <LoadingOutlined spin className="users-friend-action-loading-icon" />
+              ) : (
+                "X"
+              )}
+            </Button>
+          ) : (
+            <Button
+              type="primary"
+              shape="circle"
+              className="users-friend-add-btn"
+              title={actionLabel}
+              aria-label={actionLabel}
+              disabled={!row.canAddFriend || row.friendButtonLoading}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (row.friendButtonLoading) {
+                  return;
+                }
+                void row.onAddFriend?.();
+              }}
+            >
+              {row.friendButtonLoading ? (
+                <LoadingOutlined spin className="users-friend-action-loading-icon" />
+              ) : (
+                "+"
+              )}
+            </Button>
+          )}
+        </div>
+      );
+    },
   },
 ];
 
@@ -212,7 +282,26 @@ const UsersPage: React.FC = () => {
   const [leaderboardSearchTerm, setLeaderboardSearchTerm] = useState("");
   const debouncedLeaderboardSearchTerm = useDebouncedValue(leaderboardSearchTerm, 1000);
   const [historyStatsByUserId, setHistoryStatsByUserId] = useState<Record<string, UserHistoryPlayedStats>>({});
+  const [friendIds, setFriendIds] = useState<string[]>([]);
+  const [pendingFriendRequestIds, setPendingFriendRequestIds] = useState<Record<string, true>>({});
+  const [addingFriendById, setAddingFriendById] = useState<Record<string, boolean>>({});
+  const [removingFriendById, setRemovingFriendById] = useState<Record<string, boolean>>({});
+  const [showFriendsOnlyUsers, setShowFriendsOnlyUsers] = useState(false);
+  const [showFriendsOnlyLeaderboard, setShowFriendsOnlyLeaderboard] = useState(false);
   const liveConnected = useApiConnectionStatus(userId.trim(), token.trim());
+
+  const reconcilePendingRequests = useCallback((acceptedFriendIds: string[]) => {
+    const acceptedSet = new Set(acceptedFriendIds);
+    setPendingFriendRequestIds((previous) => {
+      const next: Record<string, true> = {};
+      Object.keys(previous).forEach((id) => {
+        if (!acceptedSet.has(id)) {
+          next[id] = true;
+        }
+      });
+      return next;
+    });
+  }, []);
 
   const fetchUsers = useCallback(async () => {
     setRefreshing(true);
@@ -234,6 +323,198 @@ const UsersPage: React.FC = () => {
   useEffect(() => {
     void fetchUsers();
   }, [fetchUsers]);
+
+  const loadFriendIds = useCallback(async () => {
+    const authToken = token.trim();
+    if (!authToken) {
+      setFriendIds([]);
+      return [];
+    }
+
+    try {
+      const payload = await apiService.getWithAuth<Array<string | number>>(
+        "/users/me/friends/ids",
+        authToken,
+      );
+      const normalized = (payload ?? [])
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0);
+      setFriendIds(normalized);
+      return normalized;
+    } catch {
+      setFriendIds([]);
+      return [];
+    }
+  }, [apiService, token]);
+
+  const loadOutgoingPendingFriendRequestIds = useCallback(async () => {
+    const authToken = token.trim();
+    if (!authToken) {
+      setPendingFriendRequestIds({});
+      return [];
+    }
+
+    try {
+      const payload = await apiService.getWithAuth<Array<string | number>>(
+        "/users/me/friends/requests/outgoing/ids",
+        authToken,
+      );
+      const normalized = (payload ?? [])
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0);
+      setPendingFriendRequestIds(
+        normalized.reduce<Record<string, true>>((acc, id) => {
+          acc[id] = true;
+          return acc;
+        }, {}),
+      );
+      return normalized;
+    } catch {
+      return [];
+    }
+  }, [apiService, token]);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([loadFriendIds(), loadOutgoingPendingFriendRequestIds()]).then(([ids]) => {
+      if (!active) {
+        return;
+      }
+      reconcilePendingRequests(ids);
+    });
+    return () => {
+      active = false;
+    };
+  }, [loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
+
+  useEffect(() => {
+    const authToken = token.trim();
+    if (!authToken || typeof window === "undefined") {
+      return;
+    }
+    let active = true;
+    const refreshFriendRequestState = async () => {
+      const acceptedIds = await loadFriendIds();
+      if (!active) {
+        return;
+      }
+      reconcilePendingRequests(acceptedIds);
+      await loadOutgoingPendingFriendRequestIds();
+    };
+    void refreshFriendRequestState();
+    const intervalId = window.setInterval(() => {
+      void refreshFriendRequestState();
+    }, FRIEND_REQUEST_STATUS_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests, token]);
+
+  const refreshUsersAndFriends = useCallback(async () => {
+    await fetchUsers();
+    const acceptedIds = await loadFriendIds();
+    await loadOutgoingPendingFriendRequestIds();
+    reconcilePendingRequests(acceptedIds);
+  }, [fetchUsers, loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
+
+  const handleAddFriend = useCallback(async (targetUserId: string) => {
+    const authToken = token.trim();
+    const normalizedTargetId = String(targetUserId ?? "").trim();
+    if (!authToken || !normalizedTargetId) {
+      return;
+    }
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm("Do you really want to add this user to your friend list");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setAddingFriendById((previous) => ({
+      ...previous,
+      [normalizedTargetId]: true,
+    }));
+    const startedAtMs = Date.now();
+    try {
+      await apiService.postWithAuth<void>(
+        `/users/me/friends/requests/${encodeURIComponent(normalizedTargetId)}`,
+        {},
+        authToken,
+      );
+      setPendingFriendRequestIds((previous) => ({
+        ...previous,
+        [normalizedTargetId]: true,
+      }));
+      const [acceptedIds] = await Promise.all([
+        loadFriendIds(),
+        loadOutgoingPendingFriendRequestIds(),
+      ]);
+      if (acceptedIds.includes(normalizedTargetId)) {
+        setPendingFriendRequestIds((previous) => {
+          const next = { ...previous };
+          delete next[normalizedTargetId];
+          return next;
+        });
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not send friend request:\n${error.message}`);
+      } else {
+        alert("Could not send friend request.");
+      }
+    } finally {
+      await keepLoadingVisible(startedAtMs);
+      setAddingFriendById((previous) => ({
+        ...previous,
+        [normalizedTargetId]: false,
+      }));
+    }
+  }, [apiService, token, loadFriendIds, loadOutgoingPendingFriendRequestIds]);
+
+  const handleRemoveFriend = useCallback(async (targetUserId: string) => {
+    const authToken = token.trim();
+    const normalizedTargetId = String(targetUserId ?? "").trim();
+    if (!authToken || !normalizedTargetId) {
+      return;
+    }
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm("Do you really want to remove this user from your friend list");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setRemovingFriendById((previous) => ({
+      ...previous,
+      [normalizedTargetId]: true,
+    }));
+    const startedAtMs = Date.now();
+    try {
+      await apiService.deleteWithAuth<void>(
+        `/users/me/friends/${encodeURIComponent(normalizedTargetId)}`,
+        authToken,
+      );
+      setPendingFriendRequestIds((previous) => {
+        const next = { ...previous };
+        delete next[normalizedTargetId];
+        return next;
+      });
+      await Promise.all([loadFriendIds(), loadOutgoingPendingFriendRequestIds()]);
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not remove friend:\n${error.message}`);
+      } else {
+        alert("Could not remove friend.");
+      }
+    } finally {
+      await keepLoadingVisible(startedAtMs);
+      setRemovingFriendById((previous) => ({
+        ...previous,
+        [normalizedTargetId]: false,
+      }));
+    }
+  }, [apiService, token, loadFriendIds, loadOutgoingPendingFriendRequestIds]);
 
   useEffect(() => {
     const authToken = token.trim();
@@ -291,11 +572,33 @@ const UsersPage: React.FC = () => {
     };
   }, [apiService, token, users]);
 
+  const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
+
   const rows: UserRow[] = useMemo(
     () =>
       (users ?? [])
         .map((user) => {
           const normalizedId = String(user.id ?? "").trim();
+          const isSelf = normalizedId.length > 0 && normalizedId === userId.trim();
+          const isFriend = normalizedId.length > 0 && friendIdSet.has(normalizedId);
+          const isAddingFriend = normalizedId.length > 0 && Boolean(addingFriendById[normalizedId]);
+          const isRemovingFriend = normalizedId.length > 0 && Boolean(removingFriendById[normalizedId]);
+          const isPendingFriendRequest =
+            normalizedId.length > 0 &&
+            Boolean(pendingFriendRequestIds[normalizedId]) &&
+            !isAddingFriend;
+          const canAddFriend =
+            !isSelf &&
+            normalizedId.length > 0 &&
+            token.trim().length > 0 &&
+            !isFriend &&
+            !isPendingFriendRequest &&
+            !isRemovingFriend;
+          const canRemoveFriend =
+            !isSelf &&
+            normalizedId.length > 0 &&
+            token.trim().length > 0 &&
+            isFriend;
           const historyStats = normalizedId ? historyStatsByUserId[normalizedId] : undefined;
           const rowWithLegacyMetrics = user as User & {
             gamesPlayed?: number | null;
@@ -333,9 +636,25 @@ const UsersPage: React.FC = () => {
             overallRankValue,
             presenceLabel: toPresenceLabel(presenceKey),
             presenceKey,
+            canAddFriend,
+            canRemoveFriend,
+            friendButtonLoading: isAddingFriend || isRemovingFriend || isPendingFriendRequest,
+            onAddFriend: canAddFriend ? async () => handleAddFriend(normalizedId) : null,
+            onRemoveFriend: canRemoveFriend ? async () => handleRemoveFriend(normalizedId) : null,
           };
         }),
-    [historyStatsByUserId, users],
+    [
+      addingFriendById,
+      friendIdSet,
+      handleAddFriend,
+      handleRemoveFriend,
+      historyStatsByUserId,
+      pendingFriendRequestIds,
+      removingFriendById,
+      token,
+      userId,
+      users,
+    ],
   );
 
   const userRows = useMemo(
@@ -346,6 +665,10 @@ const UsersPage: React.FC = () => {
   const normalizedSearch = debouncedSearchTerm.trim().toLowerCase();
   const filteredUsers =
     userRows?.filter((user) => {
+      const id = String(user.id ?? "").trim();
+      if (showFriendsOnlyUsers && !friendIdSet.has(id)) {
+        return false;
+      }
       if (!normalizedSearch) {
         return true;
       }
@@ -382,6 +705,11 @@ const UsersPage: React.FC = () => {
   const normalizedLeaderboardSearch = debouncedLeaderboardSearchTerm.trim().toLowerCase();
   const filteredLeaderboardRows =
     leaderboardRows?.filter((row) => {
+      const id = String(row.id ?? "").trim();
+      const isSelf = id.length > 0 && id === userId.trim();
+      if (showFriendsOnlyLeaderboard && !isSelf && !friendIdSet.has(id)) {
+        return false;
+      }
       if (!normalizedLeaderboardSearch) {
         return true;
       }
@@ -418,7 +746,7 @@ const UsersPage: React.FC = () => {
           >
             {users ? (
               <>
-                <div className="users-overview-toolbar">
+                <div className="users-overview-toolbar users-overview-toolbar-with-filters">
                   <Input
                     value={searchTerm}
                     allowClear
@@ -426,11 +754,18 @@ const UsersPage: React.FC = () => {
                     placeholder="Search by Username or Status"
                     onChange={(event) => setSearchTerm(event.target.value)}
                   />
+                  <Checkbox
+                    className="users-overview-filter-toggle"
+                    checked={showFriendsOnlyUsers}
+                    onChange={(event) => setShowFriendsOnlyUsers(event.target.checked)}
+                  >
+                    Show Friends Only
+                  </Checkbox>
                   <Button
                     type="default"
                     className="users-refresh-btn"
                     loading={refreshing}
-                    onClick={() => void fetchUsers()}
+                    onClick={() => void refreshUsersAndFriends()}
                   >
                     Refresh
                   </Button>
@@ -474,6 +809,13 @@ const UsersPage: React.FC = () => {
                 placeholder="Search by Username"
                 onChange={(event) => setLeaderboardSearchTerm(event.target.value)}
               />
+              <Checkbox
+                className="users-overview-filter-toggle"
+                checked={showFriendsOnlyLeaderboard}
+                onChange={(event) => setShowFriendsOnlyLeaderboard(event.target.checked)}
+              >
+                Show Friends Only
+              </Checkbox>
             </div>
             <Table<UserRow>
               className="users-overview-table responsive-list-table"

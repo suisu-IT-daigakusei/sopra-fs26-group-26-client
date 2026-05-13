@@ -4,7 +4,6 @@ import { useApi } from "@/hooks/useApi";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
-import { useOnlineUsersTopic } from "@/hooks/useOnlineUsersTopic";
 import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
 import {
   useOutgoingInviteStatuses,
@@ -17,7 +16,7 @@ import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import { getCharacterWavingFrameMax } from "@/utils/userSettings";
 import { Client } from "@stomp/stompjs";
-import { Button, Card, Collapse, Input, List, Popconfirm, Slider, Spin, Switch, Typography } from "antd";
+import { Button, Card, Checkbox, Collapse, Input, List, Popconfirm, Slider, Spin, Switch, Typography } from "antd";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -107,6 +106,8 @@ const MAX_ACTIVE_INVITES = 10; // CAN BE CHANGED, set to 10 to avoid users spamm
 const MAX_LOBBY_PLAYERS = 4;
 const HOST_CROWN = "\uD83D\uDC51\uFE0E";
 const KICK_ICON = "\u2716";
+const INVITE_PANEL_KEY = "invite-online-players";
+const INVITE_USERS_POLL_MS = 10000;
 const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
   afkTimeoutSeconds: 300,
   websocketGraceSeconds: 300,
@@ -394,7 +395,6 @@ function WaitingLobbyContent() {
     "activeGameStatusSnapshot",
     null,
   );
-  const onlineUsers = useOnlineUsersTopic();
   const { sentEntries, loadSent, markPending } = useOutgoingInviteStatuses(
     userId,
     token,
@@ -416,8 +416,12 @@ function WaitingLobbyContent() {
   const [inviteLoadingById, setInviteLoadingById] = useState<
     Record<string, boolean>
   >({});
+  const [inviteUsersApi, setInviteUsersApi] = useState<User[]>([]);
+  const [isInvitePanelOpen, setIsInvitePanelOpen] = useState(false);
   const [inviteSearch, setInviteSearch] = useState("");
   const debouncedInviteSearch = useDebouncedValue(inviteSearch, 1000);
+  const [showFriendsOnlyInvites, setShowFriendsOnlyInvites] = useState(false);
+  const [friendIds, setFriendIds] = useState<string[]>([]);
   const [lobbyTimerSettings, setLobbyTimerSettings] = useState<LobbyTimerSettings>(DEFAULT_LOBBY_TIMERS);
   const [updatingTimerKey, setUpdatingTimerKey] = useState<string>("");
   const [togglingReady, setTogglingReady] = useState(false);
@@ -875,6 +879,81 @@ function WaitingLobbyContent() {
     };
   }, [token, sessionIdParam, loadView, loadSent, lobbyWsConnected, tryLaunchFromActiveGameFallback]);
 
+  useEffect(() => {
+    const authToken = token.trim();
+    if (!authToken) {
+      setFriendIds([]);
+      return;
+    }
+
+    let active = true;
+    const loadFriendIds = async () => {
+      try {
+        const payload = await api.getWithAuth<Array<string | number>>(
+          "/users/me/friends/ids",
+          authToken,
+        );
+        if (!active) {
+          return;
+        }
+        const normalized = (payload ?? [])
+          .map((entry) => String(entry ?? "").trim())
+          .filter((entry) => entry.length > 0);
+        setFriendIds(normalized);
+      } catch {
+        if (active) {
+          setFriendIds([]);
+        }
+      }
+    };
+
+    void loadFriendIds();
+    return () => {
+      active = false;
+    };
+  }, [api, token]);
+
+  useEffect(() => {
+    if (!userIsHost || !isInvitePanelOpen || typeof window === "undefined") {
+      return;
+    }
+
+    let active = true;
+    const refreshInviteUsers = async () => {
+      try {
+        const allUsers = await api.get<User[]>("/users");
+        if (!active) {
+          return;
+        }
+        setInviteUsersApi(
+          allUsers.filter((user) => {
+            const presence = toPresenceKey(user.status);
+            return (
+              presence === "online" ||
+              presence === "lobby" ||
+              presence === "playing" ||
+              presence === "spectating"
+            );
+          }),
+        );
+      } catch {
+        if (active) {
+          setInviteUsersApi([]);
+        }
+      }
+    };
+
+    void refreshInviteUsers();
+    const intervalId = window.setInterval(() => {
+      void refreshInviteUsers();
+    }, INVITE_USERS_POLL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [api, isInvitePanelOpen, userIsHost]);
+
   const waitingPlayers = useMemo(
     () =>
       (view?.players ?? [])
@@ -919,9 +998,8 @@ function WaitingLobbyContent() {
     return usernames;
   }, [waitingPlayers]);
 
-  const usersForInvite = useMemo(() => {
-    return onlineUsers;
-  }, [onlineUsers]);
+  const usersForInvite = useMemo(() => inviteUsersApi, [inviteUsersApi]);
+  const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
 
   const characterByUsername = useMemo(() => {
     const mapping: Record<string, string> = {};
@@ -1195,6 +1273,13 @@ function WaitingLobbyContent() {
       .filter((player) => !player.isSelf)
       .filter((player) => !usernamesAlreadyInLobby.has(normalizeValue(player.name)))
       .filter((player) => !player.joined)
+      .filter((player) => {
+        if (!showFriendsOnlyInvites) {
+          return true;
+        }
+        const id = String(player.id ?? "").trim();
+        return id.length > 0 && friendIdSet.has(id);
+      })
       .filter(
         (player) =>
           player.presenceKey !== "offline" &&
@@ -1206,7 +1291,7 @@ function WaitingLobbyContent() {
         }
         return normalizeValue(player.name).includes(query);
       });
-  }, [inviteRows, debouncedInviteSearch, usernamesAlreadyInLobby]);
+  }, [inviteRows, debouncedInviteSearch, usernamesAlreadyInLobby, showFriendsOnlyInvites, friendIdSet]);
 
   const activeInviteCount = countActiveInvites(sentEntries);
 
@@ -1681,13 +1766,10 @@ function WaitingLobbyContent() {
                         onConfirm={() => {
                           const authToken = token.trim();
                           if (!authToken || !sessionId) return;
-                          // find userId of the player to kick by username
-                          const playerToKick = onlineUsers.find(
-                          (u) => normalizeValue(u.username) === normalizeValue(slot.label)
-                          );
-                          if (!playerToKick?.id) return;
+                          const playerToKickId = slot.userId;
+                          if (!playerToKickId) return;
                           void api.deleteWithAuth(
-                          `/lobbies/${encodeURIComponent(sessionId)}/players/${playerToKick.id}`,
+                          `/lobbies/${encodeURIComponent(sessionId)}/players/${playerToKickId}`,
                           authToken,
                           ).then(() => void loadView());
                         }}
@@ -1757,20 +1839,33 @@ function WaitingLobbyContent() {
             >
               <Collapse
                 className="lobby-invite-collapse"
+                onChange={(keys) => {
+                  const openKeys = Array.isArray(keys) ? keys : [keys];
+                  setIsInvitePanelOpen(openKeys.includes(INVITE_PANEL_KEY));
+                }}
                 items={[
                   {
-                    key: "invite-online-players",
+                    key: INVITE_PANEL_KEY,
                     label: "Invite Online Players",
                     children: (
                       <List
                         header={
-                          <Input
-                            className="lobby-invite-search"
-                            placeholder="Search players by Username"
-                            value={inviteSearch}
-                            allowClear
-                            onChange={(event) => setInviteSearch(event.target.value)}
-                          />
+                          <div className="lobby-invite-toolbar">
+                            <Input
+                              className="lobby-invite-search"
+                              placeholder="Search Players by Username"
+                              value={inviteSearch}
+                              allowClear
+                              onChange={(event) => setInviteSearch(event.target.value)}
+                            />
+                            <Checkbox
+                              className="users-overview-filter-toggle"
+                              checked={showFriendsOnlyInvites}
+                              onChange={(event) => setShowFriendsOnlyInvites(event.target.checked)}
+                            >
+                              Show Friends Only
+                            </Checkbox>
+                          </div>
                         }
                         dataSource={filteredInviteRows}
                         locale={{

@@ -11,7 +11,7 @@ const ONLINE_USERS_REFRESH_MS = 6000; // REST fallback poll (used when websocket
 
 function isOnlineStatus(raw: unknown): boolean {
   const presence = toPresenceKey(raw);
-  return presence === "online" || presence === "lobby" || presence === "playing";
+  return presence === "online" || presence === "lobby" || presence === "playing" || presence === "spectating";
 }
 
 function parseOnlineUsersJson(body: string): User[] {

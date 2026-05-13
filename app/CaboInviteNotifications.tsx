@@ -92,15 +92,26 @@ export default function CaboInviteNotifications() {
   }, [isAuthRoute, loadPending, token, userId]);
 
   const current = pending[0];
-// Caboguy animation
   const [caboGuyFrame, setCaboGuyFrame] = useState(1);
   useEffect(() => {
-      if (!current) return;
-      const interval = setInterval(() => {
-          setCaboGuyFrame(prev => prev >= 3 ? 1 : prev + 1);
-      }, 400);
-      return () => clearInterval(interval);
+    if (!current) return;
+    const interval = setInterval(() => {
+      setCaboGuyFrame((prev) => (prev >= 3 ? 1 : prev + 1));
+    }, 400);
+    return () => clearInterval(interval);
   }, [current]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const inviteActive = Boolean(!isAuthRoute && current);
+    document.body.classList.toggle("cabo-invite-active", inviteActive);
+    return () => {
+      document.body.classList.remove("cabo-invite-active");
+    };
+  }, [current, isAuthRoute]);
+
   const confirmLobbySwitchIfNeeded = useCallback(async (): Promise<boolean> => {
     const t = token.trim();
     const uid = String(userId).trim();
@@ -146,17 +157,16 @@ export default function CaboInviteNotifications() {
         String(body.waitingLobbySessionId).length > 0
       ) {
         router.push(
-          `/lobby/${encodeURIComponent(String(body.waitingLobbySessionId))}`, //updated to use encodeURIComponents
+          `/lobby/${encodeURIComponent(String(body.waitingLobbySessionId))}`,
         );
       }
     } catch (error: unknown) {
       const status = (error as ApplicationError)?.status;
       if (decision === "ACCEPT" && status === 409) {
-        alert("Lobby full. This lobby already has 4 players."); // added error msg for full lobbies // maybe add later question if want to join as spectator
+        alert("Lobby full. This lobby already has 4 players.");
       } else if (decision === "ACCEPT" && status === 404) {
         alert("Lobby not found anymore.");
       }
-      /* keep popup until user retries or server ok */
     } finally {
       setResponding(false);
     }
@@ -164,47 +174,34 @@ export default function CaboInviteNotifications() {
 
   if (isAuthRoute || !current) return null;
 
-return (
+  return (
     <div className="cabo-invite-corner" role="status" aria-live="polite">
-        {/* Cabo Männchen Animation */}
-        <div style={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: "5px",
-
-        }}>
-            <Image
-                src={`/caboguy${caboGuyFrame}.png`}
-                alt="Cabo Guy"
-                width={160}
-                height={160}
-                style={{
-                    width: "160px",
-                    height: "160px",
-                    objectFit: "contain",
-                    objectPosition: "-10% center",
-                    flexShrink: 0,
-                }}
-            />
-            <p className="cabo-invite-corner-text" style={{ margin: 0, flex: 1,wordBreak: "break-word", marginLeft: "-78px",}}>
-                <strong>{current.fromUsername}</strong> has invited you to play Cabo!
-            </p>
-        </div>
-        <div className="cabo-invite-corner-actions" style={{ marginTop: "12px" }}>
-            <Space>
-                <Button
-                    type="primary"
-                    loading={responding}
-                    onClick={() => void onDecision("ACCEPT")}
-                >
-                    Accept
-                </Button>
-                <Button disabled={responding} onClick={() => void onDecision("DECLINE")}>
-                    Decline
-                </Button>
-            </Space>
-        </div>
+      <div className="cabo-invite-corner-main">
+        <Image
+          src={`/caboguy${caboGuyFrame}.png`}
+          alt="Cabo Guy"
+          width={96}
+          height={96}
+          className="cabo-invite-corner-guy"
+        />
+        <p className="cabo-invite-corner-text">
+          <strong>{current.fromUsername}</strong> has invited you to play Cabo!
+        </p>
+      </div>
+      <div className="cabo-invite-corner-actions">
+        <Space>
+          <Button
+            type="primary"
+            loading={responding}
+            onClick={() => void onDecision("ACCEPT")}
+          >
+            Accept
+          </Button>
+          <Button disabled={responding} onClick={() => void onDecision("DECLINE")}>
+            Decline
+          </Button>
+        </Space>
+      </div>
     </div>
-);
+  );
 }

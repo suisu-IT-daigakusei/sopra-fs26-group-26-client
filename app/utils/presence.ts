@@ -1,5 +1,5 @@
 // added for lobby status, due to complexity
-export type PresenceKey = "online" | "offline" | "lobby" | "playing" | "unknown";
+export type PresenceKey = "online" | "offline" | "lobby" | "playing" | "spectating" | "unknown";
 
 // Strict parsing to avoid accidental format variants.
 export function toPresenceKey(raw: unknown): PresenceKey {
@@ -15,6 +15,8 @@ export function toPresenceKey(raw: unknown): PresenceKey {
     case "PLAYING":
     case "IN_GAME": // REMOVE LATER, hopefully they all switch to PLAYING
       return "playing";
+    case "SPECTATING":
+      return "spectating";
     case "UNKNOWN":
       return "unknown";
     default:
@@ -32,6 +34,8 @@ export function toPresenceLabel(presence: PresenceKey): string {
       return "Lobby";
     case "playing":
       return "Playing";
+    case "spectating":
+      return "Spectating";
     default:
       return "Unknown";
   }

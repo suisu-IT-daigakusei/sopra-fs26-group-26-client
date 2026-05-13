@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { Suspense } from "react";
 import CaboInviteNotifications from "./CaboInviteNotifications";
+import FriendRequestNotifications from "./FriendRequestNotifications";
 import GameReconnectPrompt from "./GameReconnectPrompt";
 import "./styles/globals.css";
 import DisconnectHandler from "./components/DisconnectHandler";
@@ -40,10 +41,11 @@ export default function RootLayout({
               <BackgroundPreferenceSync />
               <AuthRouteLoadingOverlay />
               <Suspense fallback={null}>
-                <PageTransitionLoader />
+              <PageTransitionLoader />
               </Suspense>
               <GameReconnectPrompt />
               <CaboInviteNotifications />
+              <FriendRequestNotifications />
               {children}
           </ClientThemeProvider>
         </AntdRegistry>

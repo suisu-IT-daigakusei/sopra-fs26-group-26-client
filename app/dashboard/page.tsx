@@ -16,6 +16,12 @@ import { Button, Card } from "antd";
 
 // Simple 3 variant dynamic greetings on Dashboard
 type GreetingSlot = "morning" | "day" | "afternoon" | "evening" | "night";
+type FriendOnlineSummary = {
+  friendsOnline: number;
+  playing: number;
+  lobby: number;
+  spectating: number;
+};
 
 const GREETINGS_BY_TIME_SLOT: Record<GreetingSlot, string[]> = {
   morning: [
@@ -65,6 +71,12 @@ function DashboardContent() {
 
   const [user, setUser] = useState<User | null>(null);
   const [userHistoryPayload, setUserHistoryPayload] = useState<unknown>(null);
+  const [friendOnlineSummary, setFriendOnlineSummary] = useState<FriendOnlineSummary>({
+    friendsOnline: 0,
+    playing: 0,
+    lobby: 0,
+    spectating: 0,
+  });
 
   const { value: userId, clear: clearUserId } = useLocalStorage<string>("userId", "");
   const { value: token, clear: clearToken } = useLocalStorage<string>("token", "");
@@ -152,6 +164,69 @@ function DashboardContent() {
     };
   }, [apiService, normalizedToken, normalizedUserId]);
 
+  useEffect(() => {
+    if (!normalizedToken || !normalizedUserId) {
+      setFriendOnlineSummary({
+        friendsOnline: 0,
+        playing: 0,
+        lobby: 0,
+        spectating: 0,
+      });
+      return;
+    }
+
+    let active = true;
+    let timerId: ReturnType<typeof setInterval> | null = null;
+
+    const fetchFriendSummary = async () => {
+      try {
+        const summary = await apiService.getWithAuth<FriendOnlineSummary>(
+          "/users/me/friends/online-summary",
+          normalizedToken,
+        );
+        if (!active) {
+          return;
+        }
+        setFriendOnlineSummary({
+          friendsOnline: Number(summary?.friendsOnline ?? 0),
+          playing: Number(summary?.playing ?? 0),
+          lobby: Number(summary?.lobby ?? 0),
+          spectating: Number(summary?.spectating ?? 0),
+        });
+      } catch {
+        // Keep last known values on transient failures; next poll/focus refresh will retry.
+      }
+    };
+
+    void fetchFriendSummary();
+    timerId = setInterval(() => {
+      void fetchFriendSummary();
+    }, 60000);
+
+    const refreshOnVisibleOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      void fetchFriendSummary();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", refreshOnVisibleOrFocus);
+      document.addEventListener("visibilitychange", refreshOnVisibleOrFocus);
+    }
+
+    return () => {
+      active = false;
+      if (timerId) {
+        clearInterval(timerId);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", refreshOnVisibleOrFocus);
+        document.removeEventListener("visibilitychange", refreshOnVisibleOrFocus);
+      }
+    };
+  }, [apiService, normalizedToken, normalizedUserId]);
+
   const greeting = useMemo(() => {
     const localHour = new Date().getHours();
     const slot = getGreetingSlotByHour(localHour);
@@ -194,6 +269,9 @@ function DashboardContent() {
   const winRateText = Number(winRatePct).toFixed(1).replace(/\.0$/, "");
   const winsRoundsSummary = `${roundsWon}/${roundsPlayed} (${winRateText}%)`;
   const averageScore = user?.averageScorePerRound ?? "-";
+  const friendOnlineLabel = friendOnlineSummary.friendsOnline === 1
+    ? "Friend Online"
+    : "Friends Online";
 
   return (
     <div className="cabo-background">
@@ -202,16 +280,32 @@ function DashboardContent() {
           <Card
             className="dashboard-container"
             title={
-              <div className="lobby-header-row">
+              <div className="dashboard-main-header">
                 <span className="dashboard-welcome-title">
                   <span className="dashboard-welcome-greeting">{greeting}</span>
                 </span>
-                <span
-                  className={`live-connection-symbol ${liveConnected ? "connected" : "disconnected"}`}
-                  title={liveConnected ? "Connected" : "Disconnected"}
-                >
-                  <span className="connection-symbol-dot" aria-hidden="true">{"\u25CF"}</span>
-                </span>
+                <div className="dashboard-friends-summary-row">
+                  <span className="dashboard-friends-summary-line">
+                    <span className="users-status-pill users-status-online dashboard-friends-summary-pill">
+                      <strong>{friendOnlineSummary.friendsOnline}</strong>&nbsp;{friendOnlineLabel}
+                    </span>
+                    <span className="users-status-pill users-status-playing dashboard-friends-summary-pill">
+                      <strong>{friendOnlineSummary.playing}</strong>&nbsp;Playing
+                    </span>
+                    <span className="users-status-pill users-status-lobby dashboard-friends-summary-pill">
+                      <strong>{friendOnlineSummary.lobby}</strong>&nbsp;in Lobby
+                    </span>
+                    <span className="users-status-pill users-status-spectating dashboard-friends-summary-pill">
+                      <strong>{friendOnlineSummary.spectating}</strong>&nbsp;Spectating
+                    </span>
+                  </span>
+                  <span
+                    className={`live-connection-symbol dashboard-friends-connection-symbol ${liveConnected ? "connected" : "disconnected"}`}
+                    title={liveConnected ? "Connected" : "Disconnected"}
+                  >
+                    <span className="connection-symbol-dot" aria-hidden="true">{"\u25CF"}</span>
+                  </span>
+                </div>
               </div>
             }
           >
@@ -228,6 +322,7 @@ function DashboardContent() {
               </div>
               <div className="dashboard-profile-metrics">
                 <div className="dashboard-welcome-player">{user?.username?.trim() || "Player"}</div>
+                <div className="dashboard-profile-metrics-spacer" aria-hidden="true" />
                 <div className="dashboard-metric-row">
                   <span>Wins / Rounds</span>
                   <span>{winsRoundsSummary}</span>
