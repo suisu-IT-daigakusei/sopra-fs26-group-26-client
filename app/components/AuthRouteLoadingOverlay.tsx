@@ -68,7 +68,7 @@ export default function AuthRouteLoadingOverlay() {
     if (normalizedPath === transition.targetPath) {
       return true;
     }
-    return normalizedPath !== "/login" && normalizedPath !== "/register" && normalizedPath !== "/";
+    return normalizedPath !== "/login" && normalizedPath !== "/";
   }, [normalizedPath, transition]);
 
   const transitionKey = useMemo(() => {

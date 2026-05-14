@@ -7,6 +7,8 @@ import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { User } from "@/types/user";
 import CharacterAvatar from "@/components/CharacterAvatar";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
+import { syncSharedCaboMusicSettings } from "@/hooks/useCaboMusicPlayer";
 import {
   type BackgroundOption,
   USER_DEFAULT_BACKGROUND_OPTIONS,
@@ -35,6 +37,21 @@ import {
   resolveBackgroundFile,
 } from "@/utils/userSettings";
 import { Button, Card, Form, Input, Select, Slider, Switch, message } from "antd";
+import {
+  type AuthValidationRules,
+  fetchAuthValidationRules,
+  getFallbackAuthValidationRules,
+  sanitizePasswordInput,
+  validatePassword,
+} from "@/utils/authValidation";
+import {
+  fetchConfiguredMusicFilenames,
+  type MusicTrack,
+  GAME_MUSIC_TRACK_FILENAMES,
+  getTrackBlacklistKeys,
+  getTrackDisplayTitle,
+  resolveAvailableMusicTracks,
+} from "@/utils/musicPlayer";
 
 const BIO_MAX_LENGTH = 180;
 const DEFAULT_BIO = "This player hasn't added a bio yet.";
@@ -66,6 +83,52 @@ function normalizeTagList(values: string[]): string[] {
     .sort((left, right) => left.localeCompare(right));
 }
 
+function normalizeBlacklistKey(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function resolveBlacklistValueToTrackId(
+  rawValue: string,
+  tracks: MusicTrack[],
+): string {
+  const normalizedRawValue = normalizeBlacklistKey(rawValue);
+  if (!normalizedRawValue) {
+    return "";
+  }
+
+  for (const track of tracks) {
+    const keys = getTrackBlacklistKeys(track);
+    if (keys.some((key) => normalizeBlacklistKey(key) === normalizedRawValue)) {
+      return track.id;
+    }
+  }
+
+  return rawValue.trim();
+}
+
+function canonicalizeMusicBlacklistValues(
+  rawValues: unknown,
+  tracks: MusicTrack[],
+): string[] {
+  const normalizedValues = normalizeMusicBlacklist(rawValues);
+  if (normalizedValues.length === 0) {
+    return [];
+  }
+
+  const uniqueValues = new Set<string>();
+  const canonical: string[] = [];
+  for (const value of normalizedValues) {
+    const mappedValue = resolveBlacklistValueToTrackId(value, tracks);
+    const normalizedMappedValue = normalizeBlacklistKey(mappedValue);
+    if (!normalizedMappedValue || uniqueValues.has(normalizedMappedValue)) {
+      continue;
+    }
+    uniqueValues.add(normalizedMappedValue);
+    canonical.push(mappedValue);
+  }
+  return canonical;
+}
+
 type GraphicsSelectionState = {
   tutorialsEnabled: boolean;
   selectedAppearance: string;
@@ -94,6 +157,7 @@ const SettingsPage = () => {
   const router = useRouter();
   const apiService = useApi();
   const [form] = Form.useForm();
+  const [authRules, setAuthRules] = useState<AuthValidationRules>(getFallbackAuthValidationRules());
 
   const [savingPassword, setSavingPassword] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -130,6 +194,7 @@ const SettingsPage = () => {
   const [musicVolume, setMusicVolume] = useState(USER_DEFAULT_MUSIC_VOLUME);
   const [soundEffectsVolume, setSoundEffectsVolume] = useState(USER_DEFAULT_SOUND_EFFECTS_VOLUME);
   const [musicBlacklist, setMusicBlacklist] = useState<string[]>([]);
+  const [availableMusicTracks, setAvailableMusicTracks] = useState<MusicTrack[]>([]);
   const [savedSoundsSelection, setSavedSoundsSelection] = useState<SoundsSelectionState>({
     musicVolume: USER_DEFAULT_MUSIC_VOLUME,
     soundEffectsVolume: USER_DEFAULT_SOUND_EFFECTS_VOLUME,
@@ -160,6 +225,19 @@ const SettingsPage = () => {
       router.replace("/login");
     }
   }, [userId, router]);
+
+  useEffect(() => {
+    let active = true;
+    void fetchAuthValidationRules(apiService).then((rules) => {
+      if (!active) {
+        return;
+      }
+      setAuthRules(rules);
+    });
+    return () => {
+      active = false;
+    };
+  }, [apiService]);
 
   useEffect(() => {
     let active = true;
@@ -216,6 +294,28 @@ const SettingsPage = () => {
 
     void loadBackgroundOptions();
 
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadAvailableMusicTracks = async () => {
+      try {
+        const configuredFilenames = await fetchConfiguredMusicFilenames(GAME_MUSIC_TRACK_FILENAMES);
+        const tracks = await resolveAvailableMusicTracks(configuredFilenames);
+        if (!active) {
+          return;
+        }
+        setAvailableMusicTracks(tracks);
+      } catch {
+        if (active) {
+          setAvailableMusicTracks([]);
+        }
+      }
+    };
+    void loadAvailableMusicTracks();
     return () => {
       active = false;
     };
@@ -280,7 +380,10 @@ const SettingsPage = () => {
 
         const nextMusicVolume = normalizeVolume(fetchedUser?.musicVolume, USER_DEFAULT_MUSIC_VOLUME);
         const nextEffectsVolume = normalizeVolume(fetchedUser?.soundEffectsVolume, USER_DEFAULT_SOUND_EFFECTS_VOLUME);
-        const nextMusicBlacklist = normalizeMusicBlacklist(fetchedUser?.musicBlacklist);
+        const nextMusicBlacklist = canonicalizeMusicBlacklistValues(
+          fetchedUser?.musicBlacklist,
+          availableMusicTracks,
+        );
         setMusicVolume(nextMusicVolume);
         setSoundEffectsVolume(nextEffectsVolume);
         setMusicBlacklist(nextMusicBlacklist);
@@ -337,7 +440,15 @@ const SettingsPage = () => {
     return () => {
       active = false;
     };
-  }, [apiService, availableBackgroundFilesSet, setStoredAppearanceMode, setStoredPrimaryColorId, token, userId]);
+  }, [
+    apiService,
+    availableBackgroundFilesSet,
+    availableMusicTracks,
+    setStoredAppearanceMode,
+    setStoredPrimaryColorId,
+    token,
+    userId,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -356,6 +467,54 @@ const SettingsPage = () => {
     mediaQuery.addListener(apply);
     return () => mediaQuery.removeListener(apply);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const handleBlacklistChanged = (event: Event) => {
+      const customEvent = event as CustomEvent<{ musicBlacklist?: unknown }>;
+      const nextValues = canonicalizeMusicBlacklistValues(
+        customEvent.detail?.musicBlacklist ?? [],
+        availableMusicTracks,
+      );
+      setMusicBlacklist(nextValues);
+      setSavedSoundsSelection((previous) => ({
+        ...previous,
+        musicBlacklist: [...nextValues],
+      }));
+    };
+    window.addEventListener("cabo:music-blacklist-changed", handleBlacklistChanged);
+    return () => {
+      window.removeEventListener("cabo:music-blacklist-changed", handleBlacklistChanged);
+    };
+  }, [availableMusicTracks]);
+
+  useEffect(() => {
+    if (availableMusicTracks.length === 0) {
+      return;
+    }
+    setMusicBlacklist((previous) => {
+      const canonical = canonicalizeMusicBlacklistValues(previous, availableMusicTracks);
+      if (areStringArraysEqual(previous, canonical)) {
+        return previous;
+      }
+      return canonical;
+    });
+    setSavedSoundsSelection((previous) => {
+      const canonicalSaved = canonicalizeMusicBlacklistValues(
+        previous.musicBlacklist,
+        availableMusicTracks,
+      );
+      if (areStringArraysEqual(previous.musicBlacklist, canonicalSaved)) {
+        return previous;
+      }
+      return {
+        ...previous,
+        musicBlacklist: canonicalSaved,
+      };
+    });
+  }, [availableMusicTracks]);
 
   const colorPriorityOptionsByIndex = useMemo(
     () => {
@@ -410,10 +569,60 @@ const SettingsPage = () => {
     musicVolume !== savedSoundsSelection.musicVolume ||
     soundEffectsVolume !== savedSoundsSelection.soundEffectsVolume ||
     !areStringArraysEqual(normalizedMusicBlacklist, normalizedSavedMusicBlacklist);
+  const musicBlacklistSelectOptions = useMemo(() => {
+    const options = availableMusicTracks.map((track) => {
+      const title = getTrackDisplayTitle(track);
+      const label = `${title} (${track.filename})`;
+      return {
+        value: track.id,
+        label,
+        searchText: `${title} ${track.filename} ${track.id}`.toLowerCase(),
+      };
+    });
+
+    const knownValues = new Set(options.map((option) => option.value));
+    const unmappedCurrentValues = musicBlacklist
+      .map((value) => String(value).trim())
+      .filter((value) => value.length > 0 && !knownValues.has(value));
+    for (const value of unmappedCurrentValues) {
+      options.push({
+        value,
+        label: value,
+        searchText: value.toLowerCase(),
+      });
+      knownValues.add(value);
+    }
+
+    options.sort((left, right) => String(left.label).localeCompare(String(right.label)));
+    return options;
+  }, [availableMusicTracks, musicBlacklist]);
+
   const passwordDirty = Boolean(
     String(passwordValue ?? "").trim().length > 0 ||
     String(confirmPasswordValue ?? "").trim().length > 0,
   );
+  const passwordDraft = String(passwordValue ?? "");
+  const confirmPasswordDraft = String(confirmPasswordValue ?? "");
+  const trimmedPasswordDraft = passwordDraft.trim();
+  const trimmedConfirmPasswordDraft = confirmPasswordDraft.trim();
+  const passwordValidationError = trimmedPasswordDraft.length > 0
+    ? validatePassword(passwordDraft, authRules)
+    : "Password is required.";
+  const passwordMatches = passwordDraft === confirmPasswordDraft;
+  const canSaveProfile =
+    profileDirty &&
+    !savingProfile &&
+    normalizedBioDraft.length <= BIO_MAX_LENGTH &&
+    !hasDuplicatePriorityColors(colorPriority);
+  const canSaveGraphics = graphicsDirty && !savingGraphics;
+  const canSaveSounds = soundsDirty && !savingSounds;
+  const canSavePassword =
+    passwordDirty &&
+    !savingPassword &&
+    trimmedPasswordDraft.length > 0 &&
+    trimmedConfirmPasswordDraft.length > 0 &&
+    !passwordValidationError &&
+    passwordMatches;
   const hasUnsavedChanges =
     profileDirty ||
     graphicsDirty ||
@@ -594,6 +803,11 @@ const SettingsPage = () => {
         soundEffectsVolume,
         musicBlacklist: [...normalizedMusicBlacklist],
       });
+      syncSharedCaboMusicSettings({
+        musicVolume,
+        soundEffectsVolume,
+        musicBlacklist: normalizedMusicBlacklist,
+      });
       message.success("Sound settings saved.");
     } catch (error) {
       if (error instanceof Error) {
@@ -616,6 +830,12 @@ const SettingsPage = () => {
 
     if (!password.trim() || !confirmPassword.trim()) {
       message.warning("Please fill in both password fields.");
+      return;
+    }
+
+    const passwordValidationError = validatePassword(password, authRules);
+    if (passwordValidationError) {
+      message.error(passwordValidationError);
       return;
     }
 
@@ -764,8 +984,9 @@ const SettingsPage = () => {
               <div className="settings-card-actions">
                 <Button
                   type="primary"
+                  className="settings-save-btn"
                   loading={savingProfile}
-                  disabled={!profileDirty}
+                  disabled={!canSaveProfile}
                   onClick={() => void handleProfileSave()}
                 >
                   Save Profile
@@ -876,8 +1097,9 @@ const SettingsPage = () => {
               <div className="settings-card-actions">
                 <Button
                   type="primary"
+                  className="settings-save-btn"
                   loading={savingGraphics}
-                  disabled={!graphicsDirty}
+                  disabled={!canSaveGraphics}
                   onClick={() => void handleGraphicsSave()}
                 >
                   Save Graphics
@@ -933,19 +1155,29 @@ const SettingsPage = () => {
                   className={`settings-music-blacklist-select ${selectSurfaceClass}`}
                   popupClassName={`settings-music-blacklist-dropdown ${selectDropdownClass}`}
                   classNames={{ popup: { root: `settings-music-blacklist-dropdown ${selectDropdownClass}` } }}
-                  mode="tags"
+                  mode="multiple"
+                  showSearch
+                  allowClear
+                  optionFilterProp="searchText"
+                  options={musicBlacklistSelectOptions}
                   value={musicBlacklist}
-                  onChange={(values) => setMusicBlacklist(normalizeMusicBlacklist(values))}
-                  placeholder="Add tags like music_01"
-                  tokenSeparators={[",", " "]}
+                  onChange={(values) =>
+                    setMusicBlacklist(canonicalizeMusicBlacklistValues(values, availableMusicTracks))
+                  }
+                  filterOption={(inputValue, option) => {
+                    const searchText = String(option?.searchText ?? "").toLowerCase();
+                    return searchText.includes(inputValue.trim().toLowerCase());
+                  }}
+                  placeholder="Search music title or filename"
                 />
               </div>
 
               <div className="settings-card-actions">
                 <Button
                   type="primary"
+                  className="settings-save-btn"
                   loading={savingSounds}
-                  disabled={!soundsDirty}
+                  disabled={!canSaveSounds}
                   onClick={() => void handleSoundsSave()}
                 >
                   Save Sounds
@@ -967,9 +1199,35 @@ const SettingsPage = () => {
                     <span className="form-label-required-star">*</span>
                   </span>
                 )}
-                rules={[{ required: true, message: "Please enter your new password." }]}
+                extra={<span className="auth-input-hint">{authRules.password.hint}</span>}
+                rules={[
+                  { required: true, message: "Please enter your new password." },
+                  {
+                    validator: async (_, value: string | undefined) => {
+                      const normalized = String(value ?? "");
+                      if (!normalized) {
+                        return;
+                      }
+                      const error = validatePassword(normalized, authRules);
+                      if (!error) {
+                        return;
+                      }
+                      throw new Error(error);
+                    },
+                  },
+                ]}
               >
-                <Input type="password" placeholder="Enter your new password" />
+                <Input
+                  type="password"
+                  placeholder="Enter your new password"
+                  maxLength={authRules.password.maxLength}
+                  onChange={(event) => {
+                    const sanitized = sanitizePasswordInput(event.target.value, authRules);
+                    if (sanitized !== event.target.value) {
+                      form.setFieldValue("password", sanitized);
+                    }
+                  }}
+                />
               </Form.Item>
               <Form.Item
                 name="confirmPassword"
@@ -992,13 +1250,24 @@ const SettingsPage = () => {
                   }),
                 ]}
               >
-                <Input type="password" placeholder="Re-enter your new password" />
+                <Input
+                  type="password"
+                  placeholder="Re-enter your new password"
+                  maxLength={authRules.password.maxLength}
+                  onChange={(event) => {
+                    const sanitized = sanitizePasswordInput(event.target.value, authRules);
+                    if (sanitized !== event.target.value) {
+                      form.setFieldValue("confirmPassword", sanitized);
+                    }
+                  }}
+                />
               </Form.Item>
               <div className="dashboard-button-stack">
                 <Button
                   type="primary"
+                  className="settings-save-btn"
                   loading={savingPassword}
-                  disabled={!passwordDirty}
+                  disabled={!canSavePassword}
                   onClick={() => void handlePasswordSave()}
                 >
                   Save Password
@@ -1011,6 +1280,10 @@ const SettingsPage = () => {
             <div className="dashboard-button-stack">
               <Button type="default" onClick={handleBack}>{"\u2190"} Back</Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

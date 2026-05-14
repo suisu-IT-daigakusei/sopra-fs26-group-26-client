@@ -106,7 +106,7 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
   }, [api, setStoredAppearanceMode, setStoredPrimaryColorId, token, userId]);
 
   const isAuthenticated = token.trim().length > 0 && userId.trim().length > 0;
-  const isAuthScreen = pathname === "/login" || pathname === "/register";
+  const isAuthScreen = pathname === "/login";
   const normalizedPrimaryColorId = normalizePrimaryColorId(storedPrimaryColorId);
   const normalizedAppearanceMode = normalizeAppearanceMode(storedAppearanceMode);
   const useUserTheme = isAuthenticated && !isAuthScreen;

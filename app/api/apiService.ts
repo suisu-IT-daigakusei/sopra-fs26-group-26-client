@@ -162,7 +162,7 @@ export class ApiService {
     }
 
     const pathname = globalThis.location?.pathname ?? "";
-    const isAuthRoute = pathname === "/" || pathname === "/login" || pathname === "/register";
+    const isAuthRoute = pathname === "/" || pathname === "/login";
     if (!isAuthRoute) {
       globalThis.location.assign("/login");
     }

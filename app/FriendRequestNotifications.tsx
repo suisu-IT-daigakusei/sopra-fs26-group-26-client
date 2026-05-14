@@ -45,10 +45,10 @@ export default function FriendRequestNotifications() {
   const { value: token } = useLocalStorage<string>("token", "");
   const [pending, setPending] = useState<IncomingFriendRequest[]>([]);
   const [processing, setProcessing] = useState(false);
-  const [caboGuyFrame, setCaboGuyFrame] = useState(1);
+  const [requestAttentionFrame, setRequestAttentionFrame] = useState(1);
 
   const isAuthRoute =
-    pathname === "/" || pathname === "/login" || pathname === "/register";
+    pathname === "/" || pathname === "/login";
 
   const loadIncoming = useCallback(async () => {
     const authToken = token.trim();
@@ -100,7 +100,7 @@ export default function FriendRequestNotifications() {
       return;
     }
     const interval = setInterval(() => {
-      setCaboGuyFrame((prev) => (prev >= 3 ? 1 : prev + 1));
+      setRequestAttentionFrame((prev) => (prev >= 3 ? 1 : prev + 1));
     }, 400);
     return () => clearInterval(interval);
   }, [current]);
@@ -160,7 +160,7 @@ export default function FriendRequestNotifications() {
     <div className="cabo-friend-request-corner" role="status" aria-live="polite">
       <div className="cabo-friend-request-corner-main">
         <Image
-          src={`/caboguy${caboGuyFrame}.png`}
+          src={`/request_attention${requestAttentionFrame}.png`}
           alt="Cabo Guy"
           width={96}
           height={96}

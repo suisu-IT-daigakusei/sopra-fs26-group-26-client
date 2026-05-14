@@ -5,8 +5,10 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
+import { formatLocalDateTime, toEpochMs } from "@/utils/dateTime";
 import { Button, Card, Spin, Table } from "antd";
 import type { TableProps } from "antd";
 
@@ -297,27 +299,6 @@ function buildFinalRoundScoresSnapshot(
   return { players, totalRounds };
 }
 
-function toEpochMs(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const milliseconds = value < 10_000_000_000 ? value * 1000 : value;
-    return Number.isFinite(milliseconds) ? milliseconds : 0;
-  }
-
-  const text = String(value ?? "").trim();
-  if (!text) {
-    return 0;
-  }
-
-  const parsedNumeric = Number(text);
-  if (Number.isFinite(parsedNumeric)) {
-    const milliseconds = parsedNumeric < 10_000_000_000 ? parsedNumeric * 1000 : parsedNumeric;
-    return Number.isFinite(milliseconds) ? milliseconds : 0;
-  }
-
-  const parsedDate = new Date(text).getTime();
-  return Number.isFinite(parsedDate) ? parsedDate : 0;
-}
-
 function extractSessionHistoryEntries(payload: unknown): Record<string, unknown>[] {
   if (Array.isArray(payload)) {
     return payload
@@ -472,10 +453,7 @@ type SelectedRoundScore = {
 };
 
 function toMoveTimestampText(epochMs: number): string {
-  if (!Number.isFinite(epochMs) || epochMs <= 0) {
-    return "-";
-  }
-  return new Date(epochMs).toLocaleString();
+  return formatLocalDateTime(epochMs);
 }
 
 function normalizeActionType(actionType: string): string {
@@ -1161,6 +1139,10 @@ const HistoryPage: React.FC = () => {
                 Back to Dashboard
               </Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

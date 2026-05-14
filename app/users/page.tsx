@@ -8,6 +8,7 @@ import { useApi } from "@/hooks/useApi";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { User } from "@/types/user";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import { derivePlayedStatsFromHistoryPayload, UserHistoryPlayedStats } from "@/utils/userHistoryStats";
@@ -847,6 +848,10 @@ const UsersPage: React.FC = () => {
                 {"\u2190"} Back
               </Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

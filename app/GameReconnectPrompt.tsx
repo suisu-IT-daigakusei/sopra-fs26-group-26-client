@@ -22,7 +22,7 @@ function normalizeString(value: unknown): string {
 }
 
 function isAuthRoute(pathname: string): boolean {
-  return pathname === "/" || pathname === "/login" || pathname === "/register";
+  return pathname === "/" || pathname === "/login";
 }
 
 function isGameRoute(pathname: string): boolean {

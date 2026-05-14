@@ -44,7 +44,7 @@ export default function CaboInviteNotifications() {
   const [responding, setResponding] = useState(false);
 
   const isAuthRoute =
-    pathname === "/" || pathname === "/login" || pathname === "/register";
+    pathname === "/" || pathname === "/login";
 
   const loadPending = useCallback(async () => {
     const t = token.trim();
@@ -92,11 +92,11 @@ export default function CaboInviteNotifications() {
   }, [isAuthRoute, loadPending, token, userId]);
 
   const current = pending[0];
-  const [caboGuyFrame, setCaboGuyFrame] = useState(1);
+  const [requestAttentionFrame, setRequestAttentionFrame] = useState(1);
   useEffect(() => {
     if (!current) return;
     const interval = setInterval(() => {
-      setCaboGuyFrame((prev) => (prev >= 3 ? 1 : prev + 1));
+      setRequestAttentionFrame((prev) => (prev >= 3 ? 1 : prev + 1));
     }, 400);
     return () => clearInterval(interval);
   }, [current]);
@@ -178,7 +178,7 @@ export default function CaboInviteNotifications() {
     <div className="cabo-invite-corner" role="status" aria-live="polite">
       <div className="cabo-invite-corner-main">
         <Image
-          src={`/caboguy${caboGuyFrame}.png`}
+          src={`/request_attention${requestAttentionFrame}.png`}
           alt="Cabo Guy"
           width={96}
           height={96}

@@ -14,6 +14,7 @@ import type { User } from "@/types/user";
 import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import CharacterAvatar from "@/components/CharacterAvatar";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { getCharacterWavingFrameMax } from "@/utils/userSettings";
 import { Client } from "@stomp/stompjs";
 import { Button, Card, Checkbox, Collapse, Input, List, Popconfirm, Slider, Spin, Switch, Typography } from "antd";
@@ -1690,6 +1691,96 @@ function WaitingLobbyContent() {
             ) : null}
           </Card>
 
+          {userIsHost ? ( // host vs other players see diff things
+            <Card
+              title={
+                <div className="lobby-section-title-row">
+                  <span className="lobby-section-title">Invite</span>
+                </div>
+              }
+              className="dashboard-container"
+            >
+              <Collapse
+                className="lobby-invite-collapse"
+                onChange={(keys) => {
+                  const openKeys = Array.isArray(keys) ? keys : [keys];
+                  setIsInvitePanelOpen(openKeys.includes(INVITE_PANEL_KEY));
+                }}
+                items={[
+                  {
+                    key: INVITE_PANEL_KEY,
+                    label: "Invite Online Players",
+                    children: (
+                      <List
+                        header={
+                          <div className="lobby-invite-toolbar">
+                            <Input
+                              className="lobby-invite-search"
+                              placeholder="Search Players by Username"
+                              value={inviteSearch}
+                              allowClear
+                              onChange={(event) => setInviteSearch(event.target.value)}
+                            />
+                            <Checkbox
+                              className="users-overview-filter-toggle"
+                              checked={showFriendsOnlyInvites}
+                              onChange={(event) => setShowFriendsOnlyInvites(event.target.checked)}
+                            >
+                              Show Friends Only
+                            </Checkbox>
+                          </div>
+                        }
+                        dataSource={filteredInviteRows}
+                        locale={{
+                          emptyText: inviteSearch.trim()
+                            ? "No players match your search"
+                            : "No players available",
+                        }}
+                        rowKey={(player) => String(player.id)}
+                        renderItem={(player) => (
+                          <List.Item className="create-lobby-player-row">
+                            <div className="lobby-slot-label">
+                              <span>{player.name}</span>
+                              {player.loading ? (
+                                <Spin size="small" className="create-lobby-spin" />
+                              ) : null}
+                            </div>
+                            <span
+                              className={`users-status-pill users-status-${player.presenceKey} lobby-invite-status-pill`}
+                            >
+                              {player.presenceLabel}
+                            </span>
+                            <Button
+                              className={`create-lobby-player-action${player.joined ? " lobby-invite-joined-btn" : ""}`}
+                              type={player.invited || player.joined ? "default" : "primary"}
+                              disabled={
+                                player.invited ||
+                                !token.trim() ||
+                                !sessionId ||
+                                (!player.invited &&
+                                  !player.joined &&
+                                  !canInvitePresence(player.presenceKey)) ||
+                                (!player.invited &&
+                                  activeInviteCount >= MAX_ACTIVE_INVITES)
+                              }
+                              onClick={() => handleInvite(player.id)}
+                            >
+                              {player.joined
+                                ? "Joined"
+                                : player.invited
+                                  ? "Invited"
+                                  : "Invite"}
+                            </Button>
+                          </List.Item>
+                        )}
+                      />
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+          ) : null}
+
           <Card
             title={
               <div className="lobby-section-title-row">
@@ -1828,95 +1919,6 @@ function WaitingLobbyContent() {
                   />
               </Card>
           )}
-          {userIsHost ? ( // host vs other players see diff things
-            <Card
-              title={
-                <div className="lobby-section-title-row">
-                  <span className="lobby-section-title">Invite</span>
-                </div>
-              }
-              className="dashboard-container"
-            >
-              <Collapse
-                className="lobby-invite-collapse"
-                onChange={(keys) => {
-                  const openKeys = Array.isArray(keys) ? keys : [keys];
-                  setIsInvitePanelOpen(openKeys.includes(INVITE_PANEL_KEY));
-                }}
-                items={[
-                  {
-                    key: INVITE_PANEL_KEY,
-                    label: "Invite Online Players",
-                    children: (
-                      <List
-                        header={
-                          <div className="lobby-invite-toolbar">
-                            <Input
-                              className="lobby-invite-search"
-                              placeholder="Search Players by Username"
-                              value={inviteSearch}
-                              allowClear
-                              onChange={(event) => setInviteSearch(event.target.value)}
-                            />
-                            <Checkbox
-                              className="users-overview-filter-toggle"
-                              checked={showFriendsOnlyInvites}
-                              onChange={(event) => setShowFriendsOnlyInvites(event.target.checked)}
-                            >
-                              Show Friends Only
-                            </Checkbox>
-                          </div>
-                        }
-                        dataSource={filteredInviteRows}
-                        locale={{
-                          emptyText: inviteSearch.trim()
-                            ? "No players match your search"
-                            : "No players available",
-                        }}
-                        rowKey={(player) => String(player.id)}
-                        renderItem={(player) => (
-                          <List.Item className="create-lobby-player-row">
-                            <div className="lobby-slot-label">
-                              <span>{player.name}</span>
-                              {player.loading ? (
-                                <Spin size="small" className="create-lobby-spin" />
-                              ) : null}
-                            </div>
-                            <span
-                              className={`users-status-pill users-status-${player.presenceKey} lobby-invite-status-pill`}
-                            >
-                              {player.presenceLabel}
-                            </span>
-                            <Button
-                              className={`create-lobby-player-action${player.joined ? " lobby-invite-joined-btn" : ""}`}
-                              type={player.invited || player.joined ? "default" : "primary"}
-                              disabled={
-                                player.invited ||
-                                !token.trim() ||
-                                !sessionId ||
-                                (!player.invited &&
-                                  !player.joined &&
-                                  !canInvitePresence(player.presenceKey)) ||
-                                (!player.invited &&
-                                  activeInviteCount >= MAX_ACTIVE_INVITES)
-                              }
-                              onClick={() => handleInvite(player.id)}
-                            >
-                              {player.joined
-                                ? "Joined"
-                                : player.invited
-                                  ? "Invited"
-                                  : "Invite"}
-                            </Button>
-                          </List.Item>
-                        )}
-                      />
-                    ),
-                  },
-                ]}
-              />
-            </Card>
-          ) : null}
 
           {userIsHost ? ( //host vs other players see diff things
             <Card
@@ -2217,6 +2219,10 @@ function WaitingLobbyContent() {
                 Leave Lobby
               </Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

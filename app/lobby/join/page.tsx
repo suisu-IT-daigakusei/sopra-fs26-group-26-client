@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import useLocalStorage from "@/hooks/useLocalStorage";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
 
@@ -457,6 +458,10 @@ const LobbyJoin = () => {
                                 {"\u2190"} Back
                             </Button>
                         </div>
+                    </Card>
+
+                    <Card className="dashboard-container dashboard-music-card">
+                        <InlineMusicPlayer className="dashboard-inline-music-player" />
                     </Card>
                     
                 </div>

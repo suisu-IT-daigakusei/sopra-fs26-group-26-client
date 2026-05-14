@@ -10,6 +10,7 @@ import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import CharacterAvatar from "@/components/CharacterAvatar";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { resolveCharacterColorId } from "@/utils/userSettings";
 import { Button, Card } from "antd";
@@ -375,12 +376,16 @@ function DashboardContent() {
                 Settings
               </Button>
               <Button type="primary" onClick={() => router.push("/credits")}>
-                Credits
+                Help & Credits
               </Button>
               <Button type="primary" className="dashboard-logout-btn" onClick={() => void handleLogout()}>
                 Logout
               </Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

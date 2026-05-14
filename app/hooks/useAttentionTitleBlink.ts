@@ -22,15 +22,9 @@ export function useAttentionTitleBlink({
     if (typeof document === "undefined") {
       return;
     }
-    if (!originalTitleRef.current) {
-      originalTitleRef.current = document.title;
-    }
+    originalTitleRef.current = document.title;
 
-    return () => {
-      if (originalTitleRef.current) {
-        document.title = originalTitleRef.current;
-      }
-    };
+    return;
   }, []);
 
   useEffect(() => {
@@ -40,6 +34,7 @@ export function useAttentionTitleBlink({
 
     const resolveBlinkState = () => {
       if (!enabled) {
+        originalTitleRef.current = document.title;
         setShouldBlinkNow(false);
         return;
       }
@@ -73,7 +68,8 @@ export function useAttentionTitleBlink({
 
     const originalTitle = originalTitleRef.current || document.title;
     if (!enabled || !shouldBlinkNow) {
-      document.title = originalTitle;
+      // Do not force-set document.title here; page-level title manager controls the baseline title.
+      originalTitleRef.current = document.title;
       return;
     }
 
@@ -88,8 +84,6 @@ export function useAttentionTitleBlink({
 
     return () => {
       window.clearInterval(intervalId);
-      document.title = originalTitle;
     };
   }, [alertTitle, enabled, intervalMs, shouldBlinkNow]);
 }
-

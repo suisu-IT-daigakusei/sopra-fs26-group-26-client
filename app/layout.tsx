@@ -11,6 +11,7 @@ import PageTransitionLoader from "./components/PageTransitionLoader";
 import AuthRouteLoadingOverlay from "./components/AuthRouteLoadingOverlay";
 import BackgroundPreferenceSync from "./components/BackgroundPreferenceSync";
 import ClientThemeProvider from "./components/ClientThemeProvider";
+import TabTitleManager from "./components/TabTitleManager";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,7 +24,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Student XX-XXX-XXX",
+  title: "Cabo",
   description: "sopra-fs26-template-client",
 };
 
@@ -39,6 +40,9 @@ export default function RootLayout({
           <ClientThemeProvider>
               <DisconnectHandler />
               <BackgroundPreferenceSync />
+              <Suspense fallback={null}>
+                <TabTitleManager />
+              </Suspense>
               <AuthRouteLoadingOverlay />
               <Suspense fallback={null}>
               <PageTransitionLoader />

@@ -7,7 +7,7 @@ COPY package*.json ./
 # Set npm cache to a directory the non-root user can access
 RUN npm config set cache /app/.npm-cache --global
 # Install dependencies with npm ci (exact versions in the lockfile), suppressing warnings
-RUN npm ci --loglevel=error
+RUN node --no-opt /usr/local/bin/npm ci --loglevel=error
 # Copy app (useless stuff is ignored by .dockerignore)
 COPY . .
 # Optional build metadata overrides for environments where `.git` is not present in build context
@@ -42,7 +42,7 @@ WORKDIR /app
 RUN npm config set cache /app/.npm-cache --global
 # Install runtime dependencies only
 COPY package*.json ./
-RUN npm ci --omit=dev --loglevel=error
+RUN node --no-opt /usr/local/bin/npm ci --omit=dev --loglevel=error
 # Copy app build output
 COPY --chown=3301:3301 --from=build /app/.next .next
 COPY --chown=3301:3301 --from=build /app/public public

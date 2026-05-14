@@ -3,6 +3,8 @@
 import { Button, Card } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buildInfoLocalDateTimeLabel } from "@/utils/dateTime";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 
 type BuildInfo = {
   commitId: string;
@@ -30,6 +32,7 @@ const CREDIT_NAMES = [
   "",
   "Audio Sources:",
   "pixabay.com",
+  "alkakrab.itch.io",
 ];
 
 function toBuildInfo(value: unknown): BuildInfo {
@@ -43,36 +46,8 @@ function toBuildInfo(value: unknown): BuildInfo {
   return { commitId, date, time };
 }
 
-function formatDateForDisplay(rawDate: string): string {
-  const normalized = String(rawDate ?? "").trim();
-  if (!normalized || normalized === "--------") {
-    return "--------";
-  }
-
-  const compactMatch = /^(\d{2})(\d{2})(\d{4})$/.exec(normalized);
-  if (compactMatch) {
-    const [, day, month, year] = compactMatch;
-    return `${day}.${month}.${year}`;
-  }
-
-  const dottedMatch = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(normalized);
-  if (dottedMatch) {
-    return normalized;
-  }
-
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return normalized;
-  }
-
-  const day = String(parsed.getDate()).padStart(2, "0");
-  const month = String(parsed.getMonth() + 1).padStart(2, "0");
-  const year = String(parsed.getFullYear());
-  return `${day}.${month}.${year}`;
-}
-
 function buildInfoLine(label: string, buildInfo: BuildInfo): string {
-  return `${label}: ${buildInfo.commitId}, ${formatDateForDisplay(buildInfo.date)}, ${buildInfo.time}`;
+  return `${label}: ${buildInfo.commitId}, ${buildInfoLocalDateTimeLabel(buildInfo.date, buildInfo.time)}`;
 }
 
 export default function CreditsPage() {
@@ -166,6 +141,32 @@ export default function CreditsPage() {
         <div className="create-lobby-stack dashboard-stack">
           <Card
             className="dashboard-container"
+            title={<div className="dashboard-section-title">Help</div>}
+          >
+            <div className="credits-help-block">
+              <section className="credits-help-chapter">
+                <h3>How to play Cabo</h3>
+                <p>
+                  Placeholder: explain the objective, turn flow, when to call Cabo, and how round scoring works.
+                </p>
+              </section>
+              <section className="credits-help-chapter">
+                <h3>How to navigate the website</h3>
+                <p>
+                  Placeholder: describe the dashboard, lobby/game flow, profile pages, and where to find history and leaderboard.
+                </p>
+              </section>
+              <section className="credits-help-chapter">
+                <h3>Available settings</h3>
+                <p>
+                  Placeholder: document profile, graphics, sound, privacy/tutorial preferences, and password updates.
+                </p>
+              </section>
+            </div>
+          </Card>
+
+          <Card
+            className="dashboard-container"
             title={<div className="dashboard-section-title">Credits</div>}
           >
             <div className="credits-scroll-viewport" aria-label="Credits rolling text">
@@ -194,6 +195,10 @@ export default function CreditsPage() {
                 {"\u2190"} Back
               </Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

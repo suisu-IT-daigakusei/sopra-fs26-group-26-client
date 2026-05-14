@@ -4,19 +4,20 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
+import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import type { ApplicationError } from "@/types/error";
 import { User } from "@/types/user";
 import { toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import { resolveCharacterColorId } from "@/utils/userSettings";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
+import { formatLocalDate, formatLocalDateTime, localDateSearchToken, toEpochMs } from "@/utils/dateTime";
 import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
 const DEFAULT_BIO = "This player hasn't added a bio yet."; //placeholder default text
 const RESULTS_PAGE_SIZE = 6; // can be changed
 const NO_RESULTS_TEXT = "This user has not played a game yet."; // to show a line
-const WINNER_CROWN = "\uD83D\uDC51";
 
 type ProfileResultRow = {
   key: string;
@@ -55,19 +56,7 @@ function toDigitsOnly(value: string): string {
 }
 
 function toPlayedAtSearchToken(sortValue: number): string {
-  if (!Number.isFinite(sortValue) || sortValue <= 0) {
-    return "";
-  }
-
-  const date = new Date(sortValue);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = String(date.getFullYear());
-  return `${day}${month}${year}`;
+  return localDateSearchToken(sortValue);
 }
 
 function normalizeLower(value: unknown): string {
@@ -206,56 +195,16 @@ function toReadableRounds(value: number | null): string {
 }
 
 function toPlayedAtDisplay(value: unknown): { text: string; sortValue: number } {
-  const formatDate = (date: Date): string =>
-    date.toLocaleString(undefined, {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const milliseconds = value < 10_000_000_000 ? value * 1000 : value;
-    const date = new Date(milliseconds);
-    if (!Number.isNaN(date.getTime())) {
-      return {
-        text: formatDate(date),
-        sortValue: date.getTime(),
-      };
-    }
-  }
-
-  const rawText = String(value ?? "").trim();
-  if (!rawText) {
-    return { text: "-", sortValue: 0 };
-  }
-
-  const numericTimestamp = toFiniteNumber(rawText);
-  if (numericTimestamp != null) {
-    const milliseconds = numericTimestamp < 10_000_000_000 ? numericTimestamp * 1000 : numericTimestamp;
-    const date = new Date(milliseconds);
-    if (!Number.isNaN(date.getTime())) {
-      return {
-        text: formatDate(date),
-        sortValue: date.getTime(),
-      };
-    }
-  }
-
-  const parsedDate = new Date(rawText);
-  if (!Number.isNaN(parsedDate.getTime())) {
+  const sortValue = toEpochMs(value);
+  if (sortValue > 0) {
     return {
-      text: formatDate(parsedDate),
-      sortValue: parsedDate.getTime(),
+      text: formatLocalDateTime(sortValue),
+      sortValue,
     };
   }
 
-  return {
-    text: rawText,
-    sortValue: 0,
-  };
+  const rawText = String(value ?? "").trim();
+  return { text: rawText || "-", sortValue: 0 };
 }
 
 function toProfileResultRows(
@@ -453,10 +402,9 @@ const resultsColumns: TableProps<ProfileResultRow>["columns"] = [
 
       return (
         <span className="profile-results-winner" title={value}>
-          <span className="profile-results-name">{value}</span>
-          {row.isWinnerCurrentUser ? (
-            <span className="profile-results-crown">{WINNER_CROWN}</span>
-          ) : null}
+          <span className={`profile-results-name${row.isWinnerCurrentUser ? " profile-results-name-self-winner" : ""}`}>
+            {value}
+          </span>
         </span>
       );
     },
@@ -754,7 +702,8 @@ const UserProfilePage: React.FC = () => {
     router.push("/dashboard");
   };
 
-  const creationDate = user?.creationDate ?? "-";
+  const creationDateRaw = String(user?.creationDate ?? "").trim();
+  const creationDate = creationDateRaw ? formatLocalDate(creationDateRaw, creationDateRaw) : "-";
   const rank = user?.overallRank ?? "-";
   const derivedPlayedStats = useMemo(
     () => derivePlayedStatsFromHistoryPayload(resultsRaw, viewedUserId),
@@ -939,7 +888,7 @@ const UserProfilePage: React.FC = () => {
                   <Input
                     allowClear
                     className="users-overview-search"
-                    placeholder="Search Date Played (DDMMYYYY)"
+                    placeholder="Search Date Played (local format)"
                     value={resultsDateQuery}
                     onChange={(event) => setResultsDateQuery(event.target.value)}
                   />
@@ -996,6 +945,10 @@ const UserProfilePage: React.FC = () => {
                 {"\u2190"} Back
               </Button>
             </div>
+          </Card>
+
+          <Card className="dashboard-container dashboard-music-card">
+            <InlineMusicPlayer className="dashboard-inline-music-player" />
           </Card>
         </div>
       </div>

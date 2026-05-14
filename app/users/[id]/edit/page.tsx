@@ -4,24 +4,50 @@
 // S3: neuer Screen der erlaubt dem eingeloggten user sein Passwort zu ändern
 // nach änderung soll user ausgeloggt werden und geht zurück zum Login
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { useApi } from "@/hooks/useApi"; // für putequest ans backend
 import useLocalStorage from "@/hooks/useLocalStorage"; // um token und userId zu löschen bei ausloggen
 import { Button, Form, Input } from "antd"; // ui komponenten
+import {
+    type AuthValidationRules,
+    fetchAuthValidationRules,
+    getFallbackAuthValidationRules,
+    sanitizePasswordInput,
+    validatePassword,
+} from "@/utils/authValidation";
 
 const EditPassword: React.FC = () => {
     const router = useRouter(); // für Navigation zu anderen Seiten
     const params = useParams(); // holt id aus der URL
     const apiService = useApi(); // zugriff auf apiservice für Requests ans Backend
     const [form] = Form.useForm();
+    const [authRules, setAuthRules] = useState<AuthValidationRules>(getFallbackAuthValidationRules());
     const { clear: clearToken } = useLocalStorage<string>("token", ""); // um token zu löschen bei ausloggen
     const { clear: clearUserId } = useLocalStorage<string>("userId", ""); // um userId zu löschen beiausloggen
+
+    useEffect(() => {
+        let active = true;
+        void fetchAuthValidationRules(apiService).then((rules) => {
+            if (!active) {
+                return;
+            }
+            setAuthRules(rules);
+        });
+        return () => {
+            active = false;
+        };
+    }, [apiService]);
 
     const handleSubmit = async (): Promise<void> => {
         const password = form.getFieldValue("password");
         if (!password) {
             alert("Please enter a new password!");
+            return;
+        }
+        const passwordError = validatePassword(String(password), authRules);
+        if (passwordError) {
+            alert(passwordError);
             return;
         }
         try {
@@ -57,11 +83,34 @@ const EditPassword: React.FC = () => {
                     <Form.Item
                         name="password"
                         label="Enter your new password"
+                        extra={<span className="auth-input-hint">{authRules.password.hint}</span>}
+                        rules={[
+                            { required: true, message: "Please enter your new password." },
+                            {
+                                validator: async (_, value: string | undefined) => {
+                                    const normalized = String(value ?? "");
+                                    if (!normalized) {
+                                        return;
+                                    }
+                                    const error = validatePassword(normalized, authRules);
+                                    if (!error) {
+                                        return;
+                                    }
+                                    throw new Error(error);
+                                },
+                            },
+                        ]}
                     >
                         <Input
                                type="password"
                                placeholder="Enter new password"
-                               onChange={(e) => form.setFieldValue("password", e.target.value)}
+                               maxLength={authRules.password.maxLength}
+                               onChange={(e) => {
+                                   const sanitized = sanitizePasswordInput(e.target.value, authRules);
+                                   if (sanitized !== e.target.value) {
+                                       form.setFieldValue("password", sanitized);
+                                   }
+                               }}
                         />
                     </Form.Item>
                     <Form.Item>
