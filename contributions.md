@@ -189,4 +189,4 @@ reason).
 ## Contributions Week 8 - [13.05.2026] to [19.05.2026]
 | **Student**        | **Date** | **Link to Commit** | **Description** |**Relevance**|
 | ------------------ | -------- | ------------------ | ------------------------------- | ----------------------------------- |
-| **@user** | date | link | description | relevance |
+| **@aleexgort** | 15.05.2026 | (https://github.com/liun777/sopra-fs26-group-26-client/commit/7ed6c7f7ce36d5f31287ead4a0702be1ace6917a) | Created the Readme.md for the frontend | Gives a quick overview for developers on how to set everything up and also for other interested people who want to play and know more about the game. |
