@@ -10,6 +10,8 @@ type InlineMusicPlayerProps = {
   className?: string;
   variant?: "compact" | "game";
   controlsDisabled?: boolean;
+  autoPersistSettings?: boolean;
+  persistDebounceMs?: number;
 };
 
 const BLACKLIST_SYMBOL = "\u2298";
@@ -23,6 +25,8 @@ export default function InlineMusicPlayer({
   className,
   variant = "compact",
   controlsDisabled = false,
+  autoPersistSettings = true,
+  persistDebounceMs = 1000,
 }: InlineMusicPlayerProps) {
   const apiService = useApi();
   const { value: token } = useLocalStorage<string>("token", "");
@@ -35,6 +39,8 @@ export default function InlineMusicPlayer({
     token: normalizedToken,
     userId: normalizedUserId,
     autoPlay: true,
+    autoPersistSettings,
+    persistDebounceMs,
   });
 
   const noTrackConfigured = !player.currentTrack;

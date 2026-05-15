@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Button } from "antd";
+import CaboChatPanel from "@/components/CaboChatPanel";
 
 type FinalPlayer = {
     userId: number;
@@ -22,6 +23,10 @@ interface FinalScoreScreenProps {
     isOpen: boolean;
     players: FinalPlayer[];
     selfUserId: number | null;
+    chatSessionId?: string | null;
+    chatToken?: string | null;
+    chatUserId?: string | number | null;
+    chatCooldownSeconds?: number;
     totalRounds?: number | null;
     rematchCountdownSeconds: number;
     myRematchDecision: RematchDecision | null;
@@ -109,6 +114,10 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     isOpen,
     players,
     selfUserId,
+    chatSessionId,
+    chatToken,
+    chatUserId,
+    chatCooldownSeconds = 3,
     totalRounds,
     rematchCountdownSeconds,
     myRematchDecision,
@@ -222,6 +231,13 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     const isUrgentCountdown = !isDecisionLocked && rematchCountdownSeconds <= 10;
     const currentRoundIndex = resolvedTotalRounds - 1;
     const currentRoundRanksByUserId = getRoundRanksByUserId(normalizedPlayers, currentRoundIndex);
+    const normalizedChatSessionId = String(chatSessionId ?? "").trim();
+    const normalizedChatToken = String(chatToken ?? "").trim();
+    const normalizedChatUserId = String(chatUserId ?? "").trim();
+    const shouldShowChat =
+        normalizedChatSessionId.length > 0 &&
+        normalizedChatToken.length > 0 &&
+        normalizedChatUserId.length > 0;
 
     const getRoundScoreText = (player: FinalPlayerResolved, roundIndex: number): string => {
         if (roundIndex < 0 || roundIndex >= resolvedTotalRounds) {
@@ -469,6 +485,19 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                             No Rematch
                         </Button>
                     </div>
+
+                    {shouldShowChat ? (
+                        <div className="final-score-chat-block">
+                            <CaboChatPanel
+                                sessionId={normalizedChatSessionId}
+                                token={normalizedChatToken}
+                                userId={normalizedChatUserId}
+                                cooldownSeconds={chatCooldownSeconds}
+                                variant="game"
+                                className="final-score-chat-panel"
+                            />
+                        </div>
+                    ) : null}
                 </div>
             </div>
         </div>

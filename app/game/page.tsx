@@ -2,10 +2,15 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CharacterAvatar from "@/components/CharacterAvatar";
+import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { useApi } from "@/hooks/useApi";
 import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
-import { playSharedCaboSoundEffect } from "@/hooks/useCaboMusicPlayer";
+import {
+    playSharedCaboSoundEffect,
+    startSharedLoopedCaboSoundEffect,
+    stopSharedLoopedCaboSoundEffect,
+} from "@/hooks/useCaboMusicPlayer";
 import { Button } from "antd";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import CardComponent from "./components/CardComponent";
@@ -60,6 +65,10 @@ type UnknownRecord = Record<string, unknown>;
 type GameStateSignal = {
     gameId?: string | null;
     id?: string | null;
+    sessionId?: string | null;
+    lobbySessionId?: string | null;
+    lobbyId?: string | null;
+    code?: string | null;
     status?: string | null;
     gameStatus?: string | null;
     phase?: string | null;
@@ -105,6 +114,7 @@ type WaitingLobbyPlayerRow = {
 
 type WaitingLobbySnapshot = {
     players?: WaitingLobbyPlayerRow[] | null;
+    chatCooldownSeconds?: number | string | null;
 };
 
 type ActiveGameStatusSnapshot = {
@@ -1137,11 +1147,15 @@ const Game = () => {
       const lastAuthoritativeResyncMsRef = useRef<number>(0);
       const hasSeenCaboCallStateRef = useRef<boolean>(false);
       const previousCaboCalledStateRef = useRef<boolean>(false);
+      const gameStartSoundPlayedForGameRef = useRef<string>("");
+      const previousCaboRevealWinnerStageRef = useRef<boolean>(false);
+      const gameAfkWarningLoopActiveRef = useRef<boolean>(false);
       const [orderedPlayerIds, setOrderedPlayerIds] = useState<number[]>([]);
       const [playerCardsById, setPlayerCardsById] = useState<Record<number, SeatCardView[]>>({});
       const [playerNamesById, setPlayerNamesById] = useState<Record<number, string>>({});
       const [playerCharacterById, setPlayerCharacterById] = useState<Record<number, string>>({});
       const [playerPrimaryColorById, setPlayerPrimaryColorById] = useState<Record<number, string>>({});
+      const [chatCooldownSeconds, setChatCooldownSeconds] = useState<number>(3);
       // Final scores state (declare early so handlers can use them safely)
       const [finalScores, setFinalScores] = useState<Array<{
           userId: number;
@@ -1326,6 +1340,10 @@ const Game = () => {
                       return;
                   }
                   const rows = Array.isArray(waitingSnapshot?.players) ? waitingSnapshot.players : [];
+                  const nextChatCooldown = Number(waitingSnapshot?.chatCooldownSeconds);
+                  if (Number.isFinite(nextChatCooldown) && nextChatCooldown > 0) {
+                      setChatCooldownSeconds(Math.max(1, Math.min(60, Math.floor(nextChatCooldown))));
+                  }
                   if (rows.length === 0) {
                       return;
                   }
@@ -1553,6 +1571,17 @@ const Game = () => {
           }
           previousCaboCalledStateRef.current = isCaboCalledGlobal;
       }, [isCaboCalledGlobal]);
+
+      useEffect(() => {
+          const normalizedGameId = String(gameId ?? "").trim();
+          if (!normalizedGameId) {
+              return;
+          }
+          if (gameStatus === "intro" && gameStartSoundPlayedForGameRef.current !== normalizedGameId) {
+              gameStartSoundPlayedForGameRef.current = normalizedGameId;
+              playSharedCaboSoundEffect("game_start");
+          }
+      }, [gameId, gameStatus]);
 
       const applyDrawnCardState = (nextDrawnCard: Card | null, sourceHint: DrawSource | null = null) => {
           setDrawnCard(nextDrawnCard);
@@ -1787,6 +1816,21 @@ const Game = () => {
                           const payloadGameId = extractGameId(payload);
                           if (payloadGameId && payloadGameId !== gameId) {
                               return;
+                          }
+                          const payloadSessionId = String(
+                              payload.sessionId ??
+                              payload.lobbySessionId ??
+                              payload.lobbyId ??
+                              payload.code ??
+                              "",
+                          ).trim();
+                          if (payloadSessionId) {
+                              const localStorageSessionId = typeof window !== "undefined"
+                                  ? String(window.localStorage.getItem("activeLobbySessionId") ?? "").trim()
+                                  : "";
+                              if (normalizeValue(payloadSessionId) !== normalizeValue(localStorageSessionId)) {
+                                  setActiveLobbySessionId(payloadSessionId);
+                              }
                           }
                           setSocketSynced(true);
                           lastGameStateSignalMsRef.current = Date.now();
@@ -2623,10 +2667,31 @@ const Game = () => {
           !isPostRoundPhase &&
           gameStatus !== "round_ended" &&
           afkRemainingSeconds <= afkWarningLeadSeconds;
+      const shouldPlayAfkWarningLoop =
+          showAfkWarning &&
+          !isRematchScreenPhase &&
+          !isCaboCalledGlobal;
       useAttentionTitleBlink({
           enabled: showAfkWarning,
           alertTitle: "AFK WARNING - Return to game",
       });
+      useEffect(() => {
+          if (shouldPlayAfkWarningLoop) {
+              if (!gameAfkWarningLoopActiveRef.current) {
+                  startSharedLoopedCaboSoundEffect("afk_warning");
+                  gameAfkWarningLoopActiveRef.current = true;
+              }
+          } else if (gameAfkWarningLoopActiveRef.current) {
+              stopSharedLoopedCaboSoundEffect("afk_warning");
+              gameAfkWarningLoopActiveRef.current = false;
+          }
+          return () => {
+              if (gameAfkWarningLoopActiveRef.current) {
+                  stopSharedLoopedCaboSoundEffect("afk_warning");
+                  gameAfkWarningLoopActiveRef.current = false;
+              }
+          };
+      }, [shouldPlayAfkWarningLoop]);
       const toDisplayedSeconds = (seconds: number): number =>
           seconds > 0 ? Math.max(0, seconds - 1) : 0;
       // Single source of truth for countdown: derive both label and bar from ms.
@@ -3993,11 +4058,13 @@ const caboRevealPlayers = useMemo(() => {
         const cardValueSum = hasEveryCardValue
             ? cards.reduce((sum, card) => sum + Number(card.value), 0)
             : null;
-        const roundScoreToReveal = lastRoundScore ?? cardValueSum;
-        const pointsToReveal = roundScoreToReveal ?? totalScore;
-        const roundScoreText = roundScoreToReveal == null
+        // Displayed equation total should always follow visible card values when available.
+        const displayRoundScore = cardValueSum ?? lastRoundScore ?? totalScore;
+        // Winner selection still follows backend round-score resolution first (special rules).
+        const pointsToReveal = lastRoundScore ?? cardValueSum ?? totalScore;
+        const roundScoreText = displayRoundScore == null
             ? "-"
-            : String(Math.trunc(roundScoreToReveal));
+            : String(Math.trunc(displayRoundScore));
 
         const mappedName = String(playerNamesById[id] ?? "").trim();
         const snapshotName = String(scoreEntry?.username ?? "").trim();
@@ -4011,7 +4078,7 @@ const caboRevealPlayers = useMemo(() => {
             cards,
             pointsToReveal,
             roundScoreText,
-            roundScoreLabel: formatPointsLabel(roundScoreToReveal),
+            roundScoreLabel: formatPointsLabel(displayRoundScore),
             isSpecialWin: scoreEntry?.isSpecialWin === true,
         };
     });
@@ -4128,6 +4195,10 @@ const caboRevealIsOutroNameExitStage =
     caboRevealTimeline.playerCount > 0 &&
     caboRevealElapsedClampedMs >= caboRevealTimeline.playersEndMs &&
     caboRevealElapsedClampedMs < caboRevealTimeline.outroNameExitEndMs;
+const caboRevealIsWinnerStage =
+    !caboRevealIsOpeningStage &&
+    !caboRevealIsPlayerStage &&
+    !caboRevealIsOutroNameExitStage;
 
 const caboRevealPlayerStageElapsedMs = Math.max(
     0,
@@ -4175,6 +4246,14 @@ const caboRevealPointsFadeProgress = caboRevealTimeline.playerPointsRevealMs > 0
     ? Math.max(0, Math.min(1, caboRevealPointsStageElapsedMs / caboRevealTimeline.playerPointsRevealMs))
     : 0;
 const caboRevealPlaceholderFrame = 1 + (Math.floor(caboRevealElapsedClampedMs / 110) % 9);
+
+useEffect(() => {
+    const isWinnerStageActive = isCaboRevealPhase && caboRevealIsWinnerStage;
+    if (!previousCaboRevealWinnerStageRef.current && isWinnerStageActive) {
+        playSharedCaboSoundEffect("applause");
+    }
+    previousCaboRevealWinnerStageRef.current = isWinnerStageActive;
+}, [isCaboRevealPhase, caboRevealIsWinnerStage]);
 
 // #36/#42: show scoreboard modal
 const handleShowScores = () => {
@@ -4336,10 +4415,6 @@ if (isIntroPhase) {
 }
 
 if (isCaboRevealPhase) {
-    const isWinnerStage =
-        !caboRevealIsOpeningStage &&
-        !caboRevealIsPlayerStage &&
-        !caboRevealIsOutroNameExitStage;
     const shouldShowSpecialFireworks =
         caboRevealIsPlayerStage &&
         caboRevealActivePlayer?.isSpecialWin === true &&
@@ -4475,7 +4550,7 @@ if (isCaboRevealPhase) {
                     </div>
                 )}
 
-                {isWinnerStage && (
+                {caboRevealIsWinnerStage && (
                     <div className="game-cabo-reveal-winner-stage">
                         <p className="game-cabo-reveal-winner-kicker">Round Winner</p>
                         <h2 className="game-cabo-reveal-winner-name">
@@ -4603,9 +4678,14 @@ const playerListRows = tablePlayerIds.map((id) => {
                           </section>
                           <section className="game-layout-zone game-layout-zone-bottom-left" aria-label="Chat">
                               <div className="game-chat-zone-card">
-                                  <p className="game-chat-zone-placeholder">
-                                      Chat window placeholder. Full in-game chat integration is pending.
-                                  </p>
+                                  <CaboChatPanel
+                                      sessionId={lobbySessionId}
+                                      token={token}
+                                      userId={userId}
+                                      cooldownSeconds={chatCooldownSeconds}
+                                      variant="game"
+                                      className="game-corner-chat-panel"
+                                  />
                               </div>
                           </section>
                           <section className="game-layout-zone game-layout-zone-bottom-right" aria-label="Audio controls">
@@ -4702,6 +4782,10 @@ const playerListRows = tablePlayerIds.map((id) => {
                       isOpen={isRematchScreenPhase}
                       players={finalScores}
                       selfUserId={selfUserId}
+                      chatSessionId={lobbySessionId}
+                      chatToken={token}
+                      chatUserId={userId}
+                      chatCooldownSeconds={chatCooldownSeconds}
                       totalRounds={finalScoreTotalRounds}
                       rematchCountdownSeconds={displayedRematchCountdown}
                       myRematchDecision={myRematchDecision}

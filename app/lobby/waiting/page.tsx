@@ -6,6 +6,11 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
 import {
+  playSharedCaboSoundEffect,
+  startSharedLoopedCaboSoundEffect,
+  stopSharedLoopedCaboSoundEffect,
+} from "@/hooks/useCaboMusicPlayer";
+import {
   useOutgoingInviteStatuses,
   type CaboSentInviteEntry,
 } from "@/hooks/useOutgoingInviteStatuses";
@@ -14,6 +19,7 @@ import type { User } from "@/types/user";
 import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import CharacterAvatar from "@/components/CharacterAvatar";
+import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { getCharacterWavingFrameMax } from "@/utils/userSettings";
 import { Client } from "@stomp/stompjs";
@@ -42,6 +48,7 @@ type WaitingView = {
   abilityRevealSeconds?: number;
   abilitySwapSeconds?: number;
   absentRoundPoints?: number;
+  chatCooldownSeconds?: number;
   players?: WaitingRow[];
   spectators?: WaitingRow[];
 };
@@ -101,6 +108,7 @@ type LobbyTimerSettings = {
   abilityRevealSeconds: number;
   abilitySwapSeconds: number;
   absentRoundPoints: number;
+  chatCooldownSeconds: number;
 };
 
 const MAX_ACTIVE_INVITES = 10; // CAN BE CHANGED, set to 10 to avoid users spamming invites, but enough for legit cases
@@ -117,6 +125,7 @@ const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
   abilityRevealSeconds: 5,
   abilitySwapSeconds: 10,
   absentRoundPoints: 20,
+  chatCooldownSeconds: 3,
 };
 const BLINK_MIN_INTERVAL_MS = 2600;
 const BLINK_MAX_INTERVAL_MS = 6800;
@@ -131,6 +140,7 @@ const TIMER_LIMITS = {
   abilityRevealSeconds: { min: 3, max: 10 },
   abilitySwapSeconds: { min: 5, max: 30 },
   absentRoundPoints: { min: 0, max: 100 },
+  chatCooldownSeconds: { min: 1, max: 60 },
 } as const;
 
 function clampTimerValue(
@@ -439,6 +449,9 @@ function WaitingLobbyContent() {
   const [stableCharacterColorByUsername, setStableCharacterColorByUsername] = useState<Record<string, string>>({});
   const nextBlinkAtMsByUsernameRef = useRef<Record<string, number>>({});
   const blinkReturnAtMsByUsernameRef = useRef<Record<string, number>>({});
+  const hasSeenReadyStateRef = useRef<boolean>(false);
+  const previousLobbyReadyStateRef = useRef<boolean>(false);
+  const lobbyAfkWarningLoopActiveRef = useRef<boolean>(false);
 
   const launchToGame = useCallback((rawGameId: unknown, rawStatus?: string, forceInitialPeekBootstrap = false) => {
     const gameId = String(rawGameId ?? "").trim();
@@ -761,6 +774,11 @@ function WaitingLobbyContent() {
             "absentRoundPoints",
             previous.absentRoundPoints,
           ),
+          chatCooldownSeconds: resolveTimerSettingFromView(
+            waitingView,
+            "chatCooldownSeconds",
+            previous.chatCooldownSeconds,
+          ),
         };
 
         const unchanged =
@@ -770,7 +788,8 @@ function WaitingLobbyContent() {
           nextSettings.turnSeconds === previous.turnSeconds &&
           nextSettings.abilityRevealSeconds === previous.abilityRevealSeconds &&
           nextSettings.abilitySwapSeconds === previous.abilitySwapSeconds &&
-          nextSettings.absentRoundPoints === previous.absentRoundPoints;
+          nextSettings.absentRoundPoints === previous.absentRoundPoints &&
+          nextSettings.chatCooldownSeconds === previous.chatCooldownSeconds;
 
         return unchanged ? previous : nextSettings;
       });
@@ -1357,6 +1376,7 @@ function WaitingLobbyContent() {
   );
 
   const sessionId = String(view?.sessionId ?? sessionIdParam ?? "").trim();
+  const everyoneReadyForStart = presentCount >= 2 && allNonHostPlayersReady;
   const lobbyConnectionIsGreen = lobbyApiConnected;
   const lobbyAfkWarningLeadSeconds = getAfkWarningLeadSeconds(lobbyTimerSettings.afkTimeoutSeconds);
   const showLobbyAfkWarning =
@@ -1375,6 +1395,42 @@ function WaitingLobbyContent() {
       setActiveSessionId(sid);
     }
   }, [sessionId, setActiveLobbySessionId, setActiveSessionId]);
+
+  useEffect(() => {
+    hasSeenReadyStateRef.current = false;
+    previousLobbyReadyStateRef.current = false;
+  }, [sessionId]);
+
+  useEffect(() => {
+    const readyNow = everyoneReadyForStart;
+    if (!hasSeenReadyStateRef.current) {
+      hasSeenReadyStateRef.current = true;
+      previousLobbyReadyStateRef.current = readyNow;
+      return;
+    }
+    if (!previousLobbyReadyStateRef.current && readyNow) {
+      playSharedCaboSoundEffect("players_ready");
+    }
+    previousLobbyReadyStateRef.current = readyNow;
+  }, [everyoneReadyForStart]);
+
+  useEffect(() => {
+    if (showLobbyAfkWarning) {
+      if (!lobbyAfkWarningLoopActiveRef.current) {
+        startSharedLoopedCaboSoundEffect("afk_warning");
+        lobbyAfkWarningLoopActiveRef.current = true;
+      }
+    } else if (lobbyAfkWarningLoopActiveRef.current) {
+      stopSharedLoopedCaboSoundEffect("afk_warning");
+      lobbyAfkWarningLoopActiveRef.current = false;
+    }
+    return () => {
+      if (lobbyAfkWarningLoopActiveRef.current) {
+        stopSharedLoopedCaboSoundEffect("afk_warning");
+        lobbyAfkWarningLoopActiveRef.current = false;
+      }
+    };
+  }, [showLobbyAfkWarning]);
 
   const handleInvite = (id: number) => {
     if (!userIsHost) {
@@ -1918,10 +1974,29 @@ function WaitingLobbyContent() {
                       )}
                   />
               </Card>
-          )}
+	          )}
 
-          {userIsHost ? ( //host vs other players see diff things
-            <Card
+	          <Card
+	            title={
+	              <div className="lobby-section-title-row">
+	                <span className="lobby-section-title">Chat</span>
+	              </div>
+	            }
+	            className="dashboard-container"
+	          >
+	            <div className="create-lobby-actions lobby-chat-panel-wrap">
+	              <CaboChatPanel
+	                sessionId={sessionId}
+	                token={token}
+	                userId={userId}
+	                cooldownSeconds={lobbyTimerSettings.chatCooldownSeconds}
+	                variant="lobby"
+	              />
+	            </div>
+	          </Card>
+
+	          {userIsHost ? ( //host vs other players see diff things
+	            <Card
               title={
                 <div className="lobby-section-title-row">
                   <span className="lobby-section-title">Settings</span>
@@ -2146,6 +2221,34 @@ function WaitingLobbyContent() {
                         }}
                       />
                       <span className="lobby-setting-row-value">{lobbyTimerSettings.absentRoundPoints}</span>
+                    </div>
+                  </div>
+                  <div className="lobby-setting-row">
+                    <span className="lobby-setting-row-label">Chat Cooldown (sec)</span>
+                    <div className="lobby-setting-row-control">
+                      <Slider
+                        min={TIMER_LIMITS.chatCooldownSeconds.min}
+                        max={TIMER_LIMITS.chatCooldownSeconds.max}
+                        step={1}
+                        marks={{
+                          [TIMER_LIMITS.chatCooldownSeconds.min]: String(TIMER_LIMITS.chatCooldownSeconds.min),
+                          3: "3",
+                          10: "10",
+                          [TIMER_LIMITS.chatCooldownSeconds.max]: String(TIMER_LIMITS.chatCooldownSeconds.max),
+                        }}
+                        value={lobbyTimerSettings.chatCooldownSeconds}
+                        disabled={updatingTimerKey === "chatCooldownSeconds"}
+                        onChange={(nextValue) => {
+                          const numeric = Array.isArray(nextValue) ? nextValue[0] : nextValue;
+                          const clamped = clampTimerValue("chatCooldownSeconds", Number(numeric));
+                          setLobbyTimerSettings((prev) => ({
+                            ...prev,
+                            chatCooldownSeconds: clamped,
+                          }));
+                          scheduleLobbyTimerSettingUpdate("chatCooldownSeconds", clamped);
+                        }}
+                      />
+                      <span className="lobby-setting-row-value">{lobbyTimerSettings.chatCooldownSeconds}s</span>
                     </div>
                   </div>
                 </div>

@@ -1283,7 +1283,10 @@ const SettingsPage = () => {
           </Card>
 
           <Card className="dashboard-container dashboard-music-card">
-            <InlineMusicPlayer className="dashboard-inline-music-player" />
+            <InlineMusicPlayer
+              className="dashboard-inline-music-player"
+              autoPersistSettings={false}
+            />
           </Card>
         </div>
       </div>

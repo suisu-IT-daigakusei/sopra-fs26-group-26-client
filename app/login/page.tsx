@@ -2,11 +2,12 @@
 
 import { useEffect } from "react";
 import AuthLandingPage from "@/components/AuthLandingPage";
-import { pauseSharedCaboMusicPlayback } from "@/hooks/useCaboMusicPlayer";
+import { pauseSharedCaboMusicPlayback, primeSharedCaboMusicAutoplay } from "@/hooks/useCaboMusicPlayer";
 
 const LoginPage: React.FC = () => {
   useEffect(() => {
     pauseSharedCaboMusicPlayback();
+    primeSharedCaboMusicAutoplay(true);
   }, []);
 
   return <AuthLandingPage />;

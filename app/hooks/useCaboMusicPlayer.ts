@@ -31,9 +31,17 @@ type UseCaboMusicPlayerOptions = {
   token: string;
   userId: string;
   autoPlay?: boolean;
+  autoPersistSettings?: boolean;
+  persistDebounceMs?: number;
 };
 
-export type CaboSoundEffectKind = "cabo_call";
+export type CaboSoundEffectKind =
+  | "cabo_call"
+  | "players_ready"
+  | "applause"
+  | "game_start"
+  | "afk_warning";
+type LoopedCaboSoundEffectKind = "afk_warning";
 const CABO_MUSIC_SETTINGS_SYNC_EVENT = "cabo:music-settings-sync";
 
 function normalizeTrackPath(src: string): string {
@@ -91,11 +99,43 @@ let sharedSoundEffectsVolume = USER_DEFAULT_SOUND_EFFECTS_VOLUME;
 let sharedMusicBlacklist: string[] = [];
 let sharedIsMusicPlaying = false;
 let sharedSettingsOwnerKey: string | null = null;
+let sharedAutoplayPrimed = true;
 let sharedSoundEffectAudioElements: HTMLAudioElement[] = [];
 const sharedSoundEffectLastPlayedAtMs: Partial<Record<CaboSoundEffectKind, number>> = {};
-const CABO_CALL_SOUND_SOURCE = "/cabo_bell.mp3";
-const CABO_CALL_SOUND_GAIN = 0.46;
-const CABO_CALL_SOUND_MIN_INTERVAL_MS = 400;
+const LOOPED_SOUND_EFFECT_KINDS: ReadonlySet<CaboSoundEffectKind> = new Set(["afk_warning"]);
+const CABO_SOUND_EFFECT_CONFIG: Record<CaboSoundEffectKind, {
+  source: string;
+  gain: number;
+  minIntervalMs: number;
+}> = {
+  cabo_call: {
+    source: "/cabo_bell.mp3",
+    gain: 0.46,
+    minIntervalMs: 400,
+  },
+  players_ready: {
+    source: "/players_ready.mp3",
+    gain: 0.55,
+    minIntervalMs: 8000,
+  },
+  applause: {
+    source: "/applause.mp3",
+    gain: 0.6,
+    minIntervalMs: 2500,
+  },
+  game_start: {
+    source: "/game_start.mp3",
+    gain: 0.58,
+    minIntervalMs: 2500,
+  },
+  afk_warning: {
+    source: "/afk_warning.mp3",
+    gain: 0.58,
+    minIntervalMs: 0,
+  },
+};
+const sharedLoopedSoundEffects: Partial<Record<LoopedCaboSoundEffectKind, HTMLAudioElement>> = {};
+const sharedLoopedSoundEffectUsageCounts: Partial<Record<LoopedCaboSoundEffectKind, number>> = {};
 
 function clampUnitVolume(raw: number): number {
   if (!Number.isFinite(raw)) {
@@ -109,13 +149,18 @@ export function playSharedCaboSoundEffect(kind: CaboSoundEffectKind): void {
     return;
   }
 
-  if (kind !== "cabo_call") {
+  const config = CABO_SOUND_EFFECT_CONFIG[kind];
+  if (!config) {
     return;
   }
-  const source = CABO_CALL_SOUND_SOURCE;
+  if (LOOPED_SOUND_EFFECT_KINDS.has(kind)) {
+    startSharedLoopedCaboSoundEffect(kind as LoopedCaboSoundEffectKind);
+    return;
+  }
+  const source = config.source;
 
   const nowMs = Date.now();
-  const minInterval = CABO_CALL_SOUND_MIN_INTERVAL_MS;
+  const minInterval = Math.max(0, config.minIntervalMs);
   const lastPlayedAt = sharedSoundEffectLastPlayedAtMs[kind] ?? 0;
   if (nowMs - lastPlayedAt < minInterval) {
     return;
@@ -126,7 +171,7 @@ export function playSharedCaboSoundEffect(kind: CaboSoundEffectKind): void {
   if (masterVolume <= 0) {
     return;
   }
-  const effectiveVolume = clampUnitVolume(masterVolume * CABO_CALL_SOUND_GAIN);
+  const effectiveVolume = clampUnitVolume(masterVolume * config.gain);
   if (effectiveVolume <= 0) {
     return;
   }
@@ -138,11 +183,12 @@ export function playSharedCaboSoundEffect(kind: CaboSoundEffectKind): void {
   if (!reusableAudio) {
     audio.preload = "auto";
     sharedSoundEffectAudioElements.push(audio);
-    if (sharedSoundEffectAudioElements.length > 24) {
-      sharedSoundEffectAudioElements = sharedSoundEffectAudioElements.slice(-24);
+    if (sharedSoundEffectAudioElements.length > 32) {
+      sharedSoundEffectAudioElements = sharedSoundEffectAudioElements.slice(-32);
     }
   }
 
+  audio.loop = false;
   audio.volume = effectiveVolume;
   try {
     audio.currentTime = 0;
@@ -154,6 +200,69 @@ export function playSharedCaboSoundEffect(kind: CaboSoundEffectKind): void {
   });
 }
 
+function syncSharedLoopedSoundEffectsVolume(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  (Object.keys(sharedLoopedSoundEffectUsageCounts) as LoopedCaboSoundEffectKind[]).forEach((kind) => {
+    if ((sharedLoopedSoundEffectUsageCounts[kind] ?? 0) <= 0) {
+      return;
+    }
+    const config = CABO_SOUND_EFFECT_CONFIG[kind];
+    if (!config) {
+      return;
+    }
+    const masterVolume = clampUnitVolume(sharedSoundEffectsVolume / 100);
+    const effectiveVolume = clampUnitVolume(masterVolume * config.gain);
+    const existingAudio = sharedLoopedSoundEffects[kind];
+    if (effectiveVolume <= 0) {
+      if (existingAudio) {
+        existingAudio.pause();
+      }
+      return;
+    }
+    const audio = existingAudio ?? new Audio(config.source);
+    if (!existingAudio) {
+      audio.preload = "auto";
+      audio.loop = true;
+      sharedLoopedSoundEffects[kind] = audio;
+    }
+    audio.volume = effectiveVolume;
+    if (audio.paused) {
+      void audio.play().catch(() => {
+        // Ignore autoplay/runtime audio errors.
+      });
+    }
+  });
+}
+
+export function startSharedLoopedCaboSoundEffect(kind: LoopedCaboSoundEffectKind): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  sharedLoopedSoundEffectUsageCounts[kind] = (sharedLoopedSoundEffectUsageCounts[kind] ?? 0) + 1;
+  syncSharedLoopedSoundEffectsVolume();
+}
+
+export function stopSharedLoopedCaboSoundEffect(kind: LoopedCaboSoundEffectKind): void {
+  const currentCount = sharedLoopedSoundEffectUsageCounts[kind] ?? 0;
+  const nextCount = Math.max(0, currentCount - 1);
+  sharedLoopedSoundEffectUsageCounts[kind] = nextCount;
+  if (nextCount > 0) {
+    return;
+  }
+  const audio = sharedLoopedSoundEffects[kind];
+  if (!audio) {
+    return;
+  }
+  audio.pause();
+  try {
+    audio.currentTime = 0;
+  } catch {
+    // Ignore non-seekable edge cases.
+  }
+}
+
 export function pauseSharedCaboMusicPlayback(resetTime = false): void {
   if (!sharedAudioElement) {
     return;
@@ -163,6 +272,13 @@ export function pauseSharedCaboMusicPlayback(resetTime = false): void {
     sharedAudioElement.currentTime = 0;
   }
   sharedIsMusicPlaying = false;
+}
+
+export function primeSharedCaboMusicAutoplay(resetTrackSelection = false): void {
+  sharedAutoplayPrimed = true;
+  if (resetTrackSelection) {
+    sharedCurrentTrackId = null;
+  }
 }
 
 export function syncSharedCaboMusicSettings(settings: {
@@ -191,6 +307,7 @@ export function syncSharedCaboMusicSettings(settings: {
   if (sharedAudioElement) {
     sharedAudioElement.volume = Math.max(0, Math.min(1, sharedMusicVolume / 100));
   }
+  syncSharedLoopedSoundEffectsVolume();
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(CABO_MUSIC_SETTINGS_SYNC_EVENT, {
@@ -204,7 +321,17 @@ export function syncSharedCaboMusicSettings(settings: {
 }
 
 export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
-  const { apiService, token, userId, autoPlay = true } = options;
+  const {
+    apiService,
+    token,
+    userId,
+    autoPlay = true,
+    autoPersistSettings = true,
+    persistDebounceMs = 1000,
+  } = options;
+  const effectivePersistDebounceMs = Number.isFinite(persistDebounceMs)
+    ? Math.max(1000, Math.floor(persistDebounceMs))
+    : 1000;
 
   const [musicVolume, setMusicVolume] = useState<number>(() => sharedMusicVolume);
   const [soundEffectsVolume, setSoundEffectsVolume] = useState<number>(() => sharedSoundEffectsVolume);
@@ -217,9 +344,14 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
   const [trackDurationSeconds, setTrackDurationSeconds] = useState<number>(0);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const firstTrackAutoplayRef = useRef<boolean>(autoPlay);
   const hasLoadedUserSettingsRef = useRef<boolean>(false);
   const settingsSaveTimeoutRef = useRef<number | null>(null);
+  const persistedSettingsRef = useRef<{
+    musicVolume: number;
+    soundEffectsVolume: number;
+    musicBlacklist: string[];
+  } | null>(null);
+  const preferRandomTrackSelectionRef = useRef<boolean>(false);
   const fadeRafRef = useRef<number | null>(null);
   const transitionTokenRef = useRef<number>(0);
   const forcePlayNextTrackRef = useRef<boolean>(false);
@@ -313,7 +445,7 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
     const alreadyLoaded = nextPath === currentPath;
     const targetVolume = Math.max(0, Math.min(1, musicVolume / 100));
     const wasPlaying = !audio.paused;
-    const shouldPlay = forcePlay || wasPlaying || firstTrackAutoplayRef.current;
+    const shouldPlay = forcePlay || wasPlaying || (autoPlay && sharedAutoplayPrimed);
     const transitionToken = transitionTokenRef.current + 1;
     transitionTokenRef.current = transitionToken;
 
@@ -329,7 +461,7 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
       } else if (!shouldPlay) {
         audio.volume = targetVolume;
       }
-      firstTrackAutoplayRef.current = false;
+      sharedAutoplayPrimed = false;
       return;
     }
 
@@ -347,7 +479,7 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
 
     if (!shouldPlay) {
       audio.volume = targetVolume;
-      firstTrackAutoplayRef.current = false;
+      sharedAutoplayPrimed = false;
       return;
     }
 
@@ -361,9 +493,9 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
     } catch {
       setIsMusicPlaying(false);
     } finally {
-      firstTrackAutoplayRef.current = false;
+      sharedAutoplayPrimed = false;
     }
-  }, [fadeAudio, musicVolume]);
+  }, [autoPlay, fadeAudio, musicVolume]);
 
   const switchToTrackByIndex = useCallback((index: number) => {
     if (filteredTracks.length === 0) {
@@ -571,15 +703,21 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
     const audioTrackMatch = currentAudioPath
       ? filteredTracks.find((entry) => normalizeTrackPath(entry.src) === currentAudioPath)?.id ?? null
       : null;
+    const shouldPickRandomFirst = preferRandomTrackSelectionRef.current;
     const resolvedTrackId = hasCurrent
       ? currentTrackId
       : hasShared
         ? sharedCurrentTrackId
-        : audioTrackMatch
+        : shouldPickRandomFirst
+          ? pickRandomTrackId(filteredTracks, audioTrackMatch)
+          : audioTrackMatch
           ? audioTrackMatch
           : pickRandomTrackId(filteredTracks);
     if (resolvedTrackId !== currentTrackId) {
       setCurrentTrackId(resolvedTrackId);
+    }
+    if (resolvedTrackId != null) {
+      preferRandomTrackSelectionRef.current = false;
     }
   }, [filteredTracks, currentTrackId]);
 
@@ -619,6 +757,7 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
 
   useEffect(() => {
     sharedSoundEffectsVolume = soundEffectsVolume;
+    syncSharedLoopedSoundEffectsVolume();
   }, [soundEffectsVolume]);
 
   useEffect(() => {
@@ -679,6 +818,7 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
     const authContextKey = `${normalizedUserId}::${authToken}`;
     if (!authToken || !normalizedUserId) {
       hasLoadedUserSettingsRef.current = false;
+      persistedSettingsRef.current = null;
       sharedSettingsOwnerKey = null;
       sharedCurrentTrackId = null;
       setCurrentTrackId(null);
@@ -717,6 +857,7 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
           setAllTracks(reshuffledTracks);
         }
         sharedCurrentTrackId = null;
+        preferRandomTrackSelectionRef.current = true;
         setCurrentTrackId(null);
         sharedMusicVolume = nextMusicVolume;
         sharedSoundEffectsVolume = nextSfxVolume;
@@ -725,6 +866,11 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
         setMusicVolume(nextMusicVolume);
         setSoundEffectsVolume(nextSfxVolume);
         setMusicBlacklist(nextBlacklist);
+        persistedSettingsRef.current = {
+          musicVolume: nextMusicVolume,
+          soundEffectsVolume: nextSfxVolume,
+          musicBlacklist: [...nextBlacklist],
+        };
         hasLoadedUserSettingsRef.current = true;
       } catch {
         if (!active) {
@@ -739,11 +885,17 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
           setAllTracks(reshuffledTracks);
         }
         sharedCurrentTrackId = null;
+        preferRandomTrackSelectionRef.current = true;
         setCurrentTrackId(null);
         sharedSettingsOwnerKey = authContextKey;
         setMusicVolume(sharedMusicVolume);
         setSoundEffectsVolume(sharedSoundEffectsVolume);
         setMusicBlacklist([...sharedMusicBlacklist]);
+        persistedSettingsRef.current = {
+          musicVolume: sharedMusicVolume,
+          soundEffectsVolume: sharedSoundEffectsVolume,
+          musicBlacklist: [...sharedMusicBlacklist],
+        };
         hasLoadedUserSettingsRef.current = true;
       }
     };
@@ -754,35 +906,66 @@ export function useCaboMusicPlayer(options: UseCaboMusicPlayerOptions) {
   }, [apiService, token, userId]);
 
   useEffect(() => {
+    if (!autoPersistSettings) {
+      return;
+    }
     const authToken = token.trim();
     const normalizedUserId = userId.trim();
     if (!hasLoadedUserSettingsRef.current || !authToken || !normalizedUserId) {
+      return;
+    }
+    const normalizedCurrentBlacklist = normalizeMusicBlacklist(musicBlacklist);
+    const persisted = persistedSettingsRef.current;
+    const hasPersistedValue = persisted != null;
+    const hasChangedFromPersisted = !hasPersistedValue
+      || persisted.musicVolume !== clampVolumePercent(musicVolume)
+      || persisted.soundEffectsVolume !== clampVolumePercent(soundEffectsVolume)
+      || normalizeMusicBlacklist(persisted.musicBlacklist).join("\u0001") !== normalizedCurrentBlacklist.join("\u0001");
+    if (!hasChangedFromPersisted) {
       return;
     }
     if (settingsSaveTimeoutRef.current != null) {
       window.clearTimeout(settingsSaveTimeoutRef.current);
     }
     settingsSaveTimeoutRef.current = window.setTimeout(() => {
+      const nextMusicVolume = clampVolumePercent(musicVolume);
+      const nextSoundEffectsVolume = clampVolumePercent(soundEffectsVolume);
+      const nextMusicBlacklist = normalizeMusicBlacklist(musicBlacklist);
       void apiService.putWithAuth<void>(
         `/users/${encodeURIComponent(normalizedUserId)}`,
         {
-          musicVolume: clampVolumePercent(musicVolume),
-          soundEffectsVolume: clampVolumePercent(soundEffectsVolume),
-          musicBlacklist: normalizeMusicBlacklist(musicBlacklist),
+          musicVolume: nextMusicVolume,
+          soundEffectsVolume: nextSoundEffectsVolume,
+          musicBlacklist: nextMusicBlacklist,
         },
         authToken,
-      ).catch(() => {
+      ).then(() => {
+        persistedSettingsRef.current = {
+          musicVolume: nextMusicVolume,
+          soundEffectsVolume: nextSoundEffectsVolume,
+          musicBlacklist: [...nextMusicBlacklist],
+        };
+      }).catch(() => {
         // keep silent for transient save failures
       });
       settingsSaveTimeoutRef.current = null;
-    }, 300);
+    }, effectivePersistDebounceMs);
     return () => {
       if (settingsSaveTimeoutRef.current != null) {
         window.clearTimeout(settingsSaveTimeoutRef.current);
         settingsSaveTimeoutRef.current = null;
       }
     };
-  }, [apiService, musicBlacklist, musicVolume, soundEffectsVolume, token, userId]);
+  }, [
+    apiService,
+    autoPersistSettings,
+    effectivePersistDebounceMs,
+    musicBlacklist,
+    musicVolume,
+    soundEffectsVolume,
+    token,
+    userId,
+  ]);
 
   return {
     tracksLoaded,

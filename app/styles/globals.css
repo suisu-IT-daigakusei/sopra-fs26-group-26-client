@@ -522,6 +522,10 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   width: 100%;
 }
 
+.lobby-chat-panel-wrap {
+  min-height: 240px;
+}
+
 @media (max-width: 700px) {
   .login-container {
     align-items: stretch;
@@ -2907,6 +2911,268 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   gap: 8px;
 }
 
+.cabo-chat-panel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #eef3ff;
+}
+
+.cabo-chat-emote-btn.ant-btn {
+  border-color: rgba(232, 168, 124, 0.72) !important;
+  background: rgba(20, 28, 42, 0.7) !important;
+  color: #ffe0be !important;
+}
+
+.cabo-chat-emote-btn.ant-btn:hover:not([disabled]) {
+  border-color: #ffd9b0 !important;
+  background: rgba(42, 56, 80, 0.86) !important;
+  color: #fff2e1 !important;
+}
+
+.cabo-chat-emote-btn.ant-btn[disabled] {
+  border-color: rgba(180, 186, 196, 0.36) !important;
+  background: rgba(73, 81, 96, 0.38) !important;
+  color: rgba(220, 225, 234, 0.7) !important;
+}
+
+.cabo-chat-messages {
+  --cabo-chat-visible-lines: 10;
+  --cabo-chat-visible-line-height: 1.3em;
+  width: 100%;
+  min-height: 0;
+  max-height: calc((var(--cabo-chat-visible-lines) * var(--cabo-chat-visible-line-height)) + 16px);
+  min-height: calc((var(--cabo-chat-visible-lines) * var(--cabo-chat-visible-line-height)) + 16px);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(9, 13, 22, 0.68);
+  padding: 8px;
+  overflow: auto;
+}
+
+.cabo-chat-empty {
+  margin: 0;
+  color: #d0d9ec;
+  font-size: 12px;
+}
+
+.cabo-chat-message {
+  margin-bottom: 8px;
+}
+
+.cabo-chat-message:last-child {
+  margin-bottom: 0;
+}
+
+.cabo-chat-message-own .cabo-chat-message-meta {
+  color: #ffd6ac;
+}
+
+.cabo-chat-message-meta {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #c9d6ee;
+}
+
+.cabo-chat-message-text {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: #f2f6ff;
+  word-break: break-word;
+}
+
+.cabo-chat-controls {
+  display: grid;
+  gap: 6px;
+}
+
+.cabo-chat-counter {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(246, 211, 173, 0.9);
+  padding-left: 6px;
+  letter-spacing: 0.01em;
+}
+
+.cabo-chat-input.ant-input-affix-wrapper {
+  background: rgba(18, 24, 38, 0.82) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  color: #f5f8ff !important;
+  padding-right: 8px !important;
+}
+
+.cabo-chat-input.ant-input-affix-wrapper .ant-input {
+  background: transparent !important;
+  color: #f5f8ff !important;
+}
+
+.cabo-chat-input.ant-input-affix-wrapper .ant-input::placeholder {
+  color: rgba(220, 228, 244, 0.72);
+}
+
+.cabo-chat-action-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.cabo-chat-icon-btn.ant-btn,
+.cabo-chat-send-btn.ant-btn {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding-inline: 2px !important;
+  min-width: 24px !important;
+  min-height: 24px !important;
+}
+
+.cabo-chat-icon-btn.ant-btn,
+.cabo-chat-emote-toggle-btn.ant-btn {
+  color: #f6d3ad !important;
+  font-size: 16px !important;
+}
+
+.cabo-chat-icon-btn.ant-btn:hover:not([disabled]),
+.cabo-chat-emote-toggle-btn.ant-btn:hover:not([disabled]),
+.cabo-chat-send-btn.ant-btn:hover:not([disabled]) {
+  color: #ffd7ad !important;
+  background: transparent !important;
+}
+
+.cabo-chat-icon-btn.ant-btn[disabled],
+.cabo-chat-emote-toggle-btn.ant-btn[disabled],
+.cabo-chat-send-btn.ant-btn[disabled] {
+  color: rgba(224, 228, 236, 0.5) !important;
+  background: transparent !important;
+}
+
+.cabo-chat-send-btn.ant-btn {
+  color: var(--ant-color-primary, #e9a87c) !important;
+  position: relative;
+}
+
+.cabo-chat-send-btn.ant-btn .ant-btn-loading-icon {
+  margin-inline-end: 0 !important;
+}
+
+.cabo-chat-send-btn-inner {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.cabo-chat-send-symbol {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.cabo-chat-send-cooldown-text {
+  position: absolute;
+  bottom: -9px;
+  right: -6px;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  color: #f6d3ad;
+}
+
+.cabo-chat-send-cooldown-ring {
+  width: 24px;
+  height: 24px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cabo-chat-send-cooldown-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-width: 2;
+}
+
+.cabo-chat-send-cooldown-ring-progress {
+  fill: none;
+  stroke: var(--ant-color-primary, #e9a87c);
+  stroke-width: 2;
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+
+.cabo-chat-spinning {
+  display: inline-block;
+  animation: cabo-chat-spin 0.8s linear infinite;
+}
+
+@keyframes cabo-chat-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.cabo-chat-emote-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cabo-chat-error {
+  margin: 0;
+  color: #ffb9b9;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* In-game corner chat: force 5 visible messages (=10 lines) and scale typography to fit zone. */
+.game-corner-chat-panel .cabo-chat-messages {
+  --cabo-chat-visible-lines: 10;
+  --cabo-chat-visible-line-height: clamp(0.62rem, calc((var(--game-zone-height) - 56px) / 10), 0.92rem);
+}
+
+.game-corner-chat-panel .cabo-chat-message {
+  margin-bottom: clamp(2px, 0.35vh, 5px);
+}
+
+.game-corner-chat-panel .cabo-chat-message-meta,
+.game-corner-chat-panel .cabo-chat-message-text {
+  line-height: var(--cabo-chat-visible-line-height);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-corner-chat-panel .cabo-chat-message-meta {
+  font-size: clamp(8px, 1.15vh, 10px);
+}
+
+.game-corner-chat-panel .cabo-chat-message-text {
+  margin-top: 0;
+  font-size: clamp(9px, 1.35vh, 11px);
+}
+
+.game-corner-chat-panel .cabo-chat-controls {
+  gap: clamp(2px, 0.45vh, 6px);
+}
+
+.game-corner-chat-panel .cabo-chat-action-row {
+  gap: clamp(3px, 0.6vw, 6px);
+}
+
+.game-corner-chat-panel .cabo-chat-counter {
+  font-size: clamp(8px, 1.2vh, 10px);
+}
+
+.game-corner-chat-panel .cabo-chat-input.ant-input-affix-wrapper {
+  min-height: clamp(22px, 3.2vh, 30px);
+  padding-block: 1px !important;
+}
+
 .inline-music-controller-hidden {
   position: fixed;
   width: 0;
@@ -3620,6 +3886,17 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 .final-score-rematch-btn.ant-btn[disabled]:focus {
   animation: none !important;
   box-shadow: none !important;
+}
+
+.final-score-chat-block {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 12px;
+}
+
+.final-score-chat-panel {
+  width: 100%;
+  height: 260px;
 }
 
 @keyframes finalScoreRematchButtonGlow {
@@ -5140,6 +5417,10 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
     width: 100%;
     min-width: 0;
   }
+
+  .final-score-chat-panel {
+    height: 230px;
+  }
 }
 
 @media (max-height: 760px) and (max-width: 900px), (max-height: 760px) and (max-aspect-ratio: 10/16) {
@@ -5319,6 +5600,14 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   .current-scores-card {
     max-height: calc(100svh - 14px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     padding: 12px 10px;
+  }
+
+  .game-corner-chat-panel {
+    --game-corner-chat-scale: 0.86;
+    transform: scale(var(--game-corner-chat-scale));
+    transform-origin: left bottom;
+    width: calc(100% / var(--game-corner-chat-scale));
+    height: calc(100% / var(--game-corner-chat-scale));
   }
 
   .final-score-table th,
