@@ -12,6 +12,7 @@ import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { User } from "@/types/user";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import { derivePlayedStatsFromHistoryPayload, UserHistoryPlayedStats } from "@/utils/userHistoryStats";
+import { showTimedConfirmation } from "@/utils/timedConfirmation";
 import { LoadingOutlined } from "@ant-design/icons";
 import { Button, Card, Checkbox, Input, Table } from "antd";
 import type { TableProps } from "antd";
@@ -44,6 +45,14 @@ function toFiniteMetric(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatMaxOneFractionDigit(value: unknown): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "-";
+  }
+  return Number(parsed.toFixed(1)).toString();
+}
+
 async function keepLoadingVisible(startedAtMs: number) {
   const elapsedMs = Date.now() - startedAtMs;
   const remainingMs = FRIEND_ACTION_MIN_LOADING_MS - elapsedMs;
@@ -71,7 +80,17 @@ const columns: TableProps<UserRow>["columns"] = [
     render: (value, row) => {
       const username = String(value ?? row.name ?? "-").trim() || "-";
       return (
-        <span className="users-username-cell" title={username}>
+        <span
+          className={`users-username-cell${row.canAddFriend ? " users-username-cell-action" : ""}`}
+          title={username}
+          onClick={(event) => {
+            if (!row.canAddFriend || row.friendButtonLoading) {
+              return;
+            }
+            event.stopPropagation();
+            void row.onAddFriend?.();
+          }}
+        >
           {username}
         </span>
       );
@@ -84,7 +103,7 @@ const columns: TableProps<UserRow>["columns"] = [
     align: "center",
     sorter: (a, b) => (a.roundsPlayed ?? -1) - (b.roundsPlayed ?? -1),
     sortDirections: ["ascend", "descend"],
-    render: (value) => (value == null ? "-" : value),
+    render: (value) => formatMaxOneFractionDigit(value),
   },
   {
     title: "Avg Score",
@@ -93,10 +112,7 @@ const columns: TableProps<UserRow>["columns"] = [
     align: "center",
     sorter: (a, b) => (a.averageScore ?? Number.MAX_SAFE_INTEGER) - (b.averageScore ?? Number.MAX_SAFE_INTEGER),
     sortDirections: ["ascend", "descend"],
-    render: (value) =>
-      value == null || Number.isNaN(Number(value))
-        ? "-"
-        : Number(value).toFixed(2).replace(/\.00$/, ""),
+    render: (value) => formatMaxOneFractionDigit(value),
   },
   {
     title: "Rounds Won %",
@@ -110,7 +126,7 @@ const columns: TableProps<UserRow>["columns"] = [
         return "-";
       }
       const pctText = Number(row.roundsWonRatePct ?? 0).toFixed(1).replace(/\.0$/, "");
-      return `${row.roundsWonValue}/${row.roundsPlayed} (${pctText}%)`;
+      return `${formatMaxOneFractionDigit(row.roundsWonValue)}/${formatMaxOneFractionDigit(row.roundsPlayed)} (${pctText}%)`;
     },
   },
   {
@@ -150,7 +166,7 @@ const columns: TableProps<UserRow>["columns"] = [
               {row.friendButtonLoading ? (
                 <LoadingOutlined spin className="users-friend-action-loading-icon" />
               ) : (
-                "X"
+                <span className="users-friend-action-symbol">{"\u2715"}</span>
               )}
             </Button>
           ) : (
@@ -172,7 +188,7 @@ const columns: TableProps<UserRow>["columns"] = [
               {row.friendButtonLoading ? (
                 <LoadingOutlined spin className="users-friend-action-loading-icon" />
               ) : (
-                "+"
+                <span className="users-friend-action-symbol">{"\u002b"}</span>
               )}
             </Button>
           )}
@@ -191,7 +207,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     width: "10%",
     sorter: (a, b) => (a.overallRankValue ?? Number.MAX_SAFE_INTEGER) - (b.overallRankValue ?? Number.MAX_SAFE_INTEGER),
     sortDirections: ["ascend", "descend"],
-    render: (value) => (value == null ? "-" : `#${value}`),
+    render: (value) => (value == null ? "-" : `#${formatMaxOneFractionDigit(value)}`),
   },
   {
     title: "Username",
@@ -208,7 +224,17 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     render: (value, row) => {
       const username = String(value ?? row.name ?? "-").trim() || "-";
       return (
-        <span className="users-username-cell" title={username}>
+        <span
+          className={`users-username-cell${row.canAddFriend ? " users-username-cell-action" : ""}`}
+          title={username}
+          onClick={(event) => {
+            if (!row.canAddFriend || row.friendButtonLoading) {
+              return;
+            }
+            event.stopPropagation();
+            void row.onAddFriend?.();
+          }}
+        >
           {username}
         </span>
       );
@@ -222,7 +248,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     width: "12%",
     sorter: (a, b) => (a.roundsPlayed ?? -1) - (b.roundsPlayed ?? -1),
     sortDirections: ["ascend", "descend"],
-    render: (value) => (value == null ? "-" : value),
+    render: (value) => formatMaxOneFractionDigit(value),
   },
   {
     title: "Avg Score",
@@ -232,10 +258,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     width: "12%",
     sorter: (a, b) => (a.averageScore ?? Number.MAX_SAFE_INTEGER) - (b.averageScore ?? Number.MAX_SAFE_INTEGER),
     sortDirections: ["ascend", "descend"],
-    render: (value) =>
-      value == null || Number.isNaN(Number(value))
-        ? "-"
-        : Number(value).toFixed(2).replace(/\.00$/, ""),
+    render: (value) => formatMaxOneFractionDigit(value),
   },
   {
     title: "Rounds Won %",
@@ -250,7 +273,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
         return "-";
       }
       const pctText = Number(row.roundsWonRatePct ?? 0).toFixed(1).replace(/\.0$/, "");
-      return `${row.roundsWonValue}/${row.roundsPlayed} (${pctText}%)`;
+      return `${formatMaxOneFractionDigit(row.roundsWonValue)}/${formatMaxOneFractionDigit(row.roundsPlayed)} (${pctText}%)`;
     },
   },
   {
@@ -266,7 +289,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
         return "-";
       }
       const pctText = Number(row.gamesWonRatePct ?? 0).toFixed(1).replace(/\.0$/, "");
-      return `${row.gamesWonValue}/${row.gamesPlayed} (${pctText}%)`;
+      return `${formatMaxOneFractionDigit(row.gamesWonValue)}/${formatMaxOneFractionDigit(row.gamesPlayed)} (${pctText}%)`;
     },
   },
 ];
@@ -419,17 +442,19 @@ const UsersPage: React.FC = () => {
     reconcilePendingRequests(acceptedIds);
   }, [fetchUsers, loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
 
-  const handleAddFriend = useCallback(async (targetUserId: string) => {
+  const handleAddFriend = useCallback(async (targetUserId: string, targetUsername: string) => {
     const authToken = token.trim();
     const normalizedTargetId = String(targetUserId ?? "").trim();
+    const normalizedTargetUsername = String(targetUsername ?? "").trim() || "this user";
     if (!authToken || !normalizedTargetId) {
       return;
     }
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm("Do you really want to add this user to your friend list");
-      if (!confirmed) {
-        return;
-      }
+    const confirmed = await showTimedConfirmation({
+      title: `Do you really want to add ${normalizedTargetUsername} to your friendlist?`,
+      timeoutSeconds: 10,
+    });
+    if (!confirmed) {
+      return;
     }
 
     setAddingFriendById((previous) => ({
@@ -473,17 +498,20 @@ const UsersPage: React.FC = () => {
     }
   }, [apiService, token, loadFriendIds, loadOutgoingPendingFriendRequestIds]);
 
-  const handleRemoveFriend = useCallback(async (targetUserId: string) => {
+  const handleRemoveFriend = useCallback(async (targetUserId: string, targetUsername: string) => {
     const authToken = token.trim();
     const normalizedTargetId = String(targetUserId ?? "").trim();
+    const normalizedTargetUsername = String(targetUsername ?? "").trim() || "this user";
     if (!authToken || !normalizedTargetId) {
       return;
     }
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm("Do you really want to remove this user from your friend list");
-      if (!confirmed) {
-        return;
-      }
+    const confirmed = await showTimedConfirmation({
+      title: `Do you really want to remove ${normalizedTargetUsername} from your friendlist?`,
+      timeoutSeconds: 10,
+      danger: true,
+    });
+    if (!confirmed) {
+      return;
     }
 
     setRemovingFriendById((previous) => ({
@@ -624,6 +652,7 @@ const UsersPage: React.FC = () => {
           const rankRaw = user.overallRank;
           const overallRankValue =
             toFiniteMetric(rankRaw);
+          const usernameLabel = String(user.username ?? user.name ?? normalizedId).trim() || normalizedId;
           return {
             ...user,
             key: String(user.id ?? ""),
@@ -640,8 +669,8 @@ const UsersPage: React.FC = () => {
             canAddFriend,
             canRemoveFriend,
             friendButtonLoading: isAddingFriend || isRemovingFriend || isPendingFriendRequest,
-            onAddFriend: canAddFriend ? async () => handleAddFriend(normalizedId) : null,
-            onRemoveFriend: canRemoveFriend ? async () => handleRemoveFriend(normalizedId) : null,
+            onAddFriend: canAddFriend ? async () => handleAddFriend(normalizedId, usernameLabel) : null,
+            onRemoveFriend: canRemoveFriend ? async () => handleRemoveFriend(normalizedId, usernameLabel) : null,
           };
         }),
     [

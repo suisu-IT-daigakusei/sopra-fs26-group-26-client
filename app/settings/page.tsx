@@ -44,6 +44,7 @@ import {
   sanitizePasswordInput,
   validatePassword,
 } from "@/utils/authValidation";
+import { showTimedConfirmation } from "@/utils/timedConfirmation";
 import {
   fetchConfiguredMusicFilenames,
   type MusicTrack,
@@ -55,12 +56,14 @@ import {
 
 const BIO_MAX_LENGTH = 180;
 const DEFAULT_BIO = "This player hasn't added a bio yet.";
+const SETTINGS_PASSWORD_HINT = "Password must be 8-32 characters, include at least one uppercase letter and one special symbol and use only A-Z, a-z, 0-9 and !\"#$%&'()*+,-./:;<=>?@[\\\\]^_`{|}~.";
 
 const SOUND_SLIDER_MARKS: Record<number, string> = Array.from({ length: 11 }, (_, index) => index * 10)
   .reduce<Record<number, string>>((acc, value) => {
     acc[value] = String(value);
     return acc;
   }, {});
+const SOUND_SLIDER_TOOLTIP = { open: false } as const;
 
 function areStringArraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) {
@@ -607,7 +610,8 @@ const SettingsPage = () => {
   const trimmedConfirmPasswordDraft = confirmPasswordDraft.trim();
   const passwordValidationError = trimmedPasswordDraft.length > 0
     ? validatePassword(passwordDraft, authRules)
-    : "Password is required.";
+    : null;
+  const passwordRuleError = Boolean(passwordValidationError);
   const passwordMatches = passwordDraft === confirmPasswordDraft;
   const canSaveProfile =
     profileDirty &&
@@ -629,14 +633,16 @@ const SettingsPage = () => {
     soundsDirty ||
     passwordDirty;
 
-  const confirmLeaveWithUnsavedChanges = useCallback((): boolean => {
+  const confirmLeaveWithUnsavedChanges = useCallback(async (): Promise<boolean> => {
     if (!hasUnsavedChanges) {
       return true;
     }
 
-    return window.confirm(
-      "You have unsaved changes.\n\nLeave this page and discard them?\n\nOK: Yes, leave.\nCancel: No, return.",
-    );
+    return showTimedConfirmation({
+      title: "You have unsaved changes. Leave this page and discard them?",
+      timeoutSeconds: 10,
+      danger: true,
+    });
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
@@ -835,7 +841,6 @@ const SettingsPage = () => {
 
     const passwordValidationError = validatePassword(password, authRules);
     if (passwordValidationError) {
-      message.error(passwordValidationError);
       return;
     }
 
@@ -861,8 +866,8 @@ const SettingsPage = () => {
     }
   };
 
-  const handleBack = () => {
-    if (!confirmLeaveWithUnsavedChanges()) {
+  const handleBack = async () => {
+    if (!(await confirmLeaveWithUnsavedChanges())) {
       return;
     }
 
@@ -1001,12 +1006,15 @@ const SettingsPage = () => {
           >
             <div className="settings-panel">
               <div className="settings-option-block">
-                <div className="settings-toggle-row">
-                  <span className="settings-option-title">Tutorials</span>
+                <div className="settings-toggle-row settings-toggle-row-disabled">
+                  <span className="settings-option-title settings-option-title-disabled">
+                    Tutorials <span className="settings-placeholder-note">(coming soon)</span>
+                  </span>
                   <Switch
                     className="lobby-private-switch"
                     checked={tutorialsEnabled}
                     onChange={setTutorialsEnabled}
+                    disabled
                     checkedChildren="Yes"
                     unCheckedChildren="No"
                   />
@@ -1121,6 +1129,7 @@ const SettingsPage = () => {
                     max={100}
                     step={1}
                     marks={SOUND_SLIDER_MARKS}
+                    tooltip={SOUND_SLIDER_TOOLTIP}
                     value={musicVolume}
                     onChange={(nextValue) => {
                       const numeric = Array.isArray(nextValue) ? nextValue[0] : nextValue;
@@ -1139,6 +1148,7 @@ const SettingsPage = () => {
                     max={100}
                     step={1}
                     marks={SOUND_SLIDER_MARKS}
+                    tooltip={SOUND_SLIDER_TOOLTIP}
                     value={soundEffectsVolume}
                     onChange={(nextValue) => {
                       const numeric = Array.isArray(nextValue) ? nextValue[0] : nextValue;
@@ -1199,7 +1209,12 @@ const SettingsPage = () => {
                     <span className="form-label-required-star">*</span>
                   </span>
                 )}
-                extra={<span className="auth-input-hint">{authRules.password.hint}</span>}
+                validateStatus={passwordRuleError ? "error" : undefined}
+                help={(
+                  <span className={`auth-input-hint${passwordRuleError ? " auth-input-hint-error" : ""}`}>
+                    {SETTINGS_PASSWORD_HINT}
+                  </span>
+                )}
                 rules={[
                   { required: true, message: "Please enter your new password." },
                   {
@@ -1212,7 +1227,7 @@ const SettingsPage = () => {
                       if (!error) {
                         return;
                       }
-                      throw new Error(error);
+                      throw new Error(" ");
                     },
                   },
                 ]}
@@ -1278,7 +1293,7 @@ const SettingsPage = () => {
 
           <Card className="dashboard-container">
             <div className="dashboard-button-stack">
-              <Button type="default" onClick={handleBack}>{"\u2190"} Back</Button>
+              <Button type="default" onClick={() => void handleBack()}>{"\u2190"} Back</Button>
             </div>
           </Card>
 

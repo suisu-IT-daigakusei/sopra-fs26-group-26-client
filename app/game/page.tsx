@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
@@ -28,6 +28,7 @@ import {
     normalizeCharacterId,
     normalizePrimaryColorId,
 } from "@/utils/userSettings";
+import { resolveConfirmationTimeoutSeconds, showTimedConfirmation } from "@/utils/timedConfirmation";
 
 interface Card {
     value: number;
@@ -83,6 +84,12 @@ type GameStateSignal = {
     abilitySwapSeconds?: number | string | null;
     caboRevealSeconds?: number | string | null;
     rematchDecisionSeconds?: number | string | null;
+    rematchDecisionRemainingSeconds?: number | string | null;
+    rematchRemainingSeconds?: number | string | null;
+    rematchDecisionDeadlineMs?: number | string | null;
+    rematchDecisionDeadlineEpochMs?: number | string | null;
+    rematchDeadlineMs?: number | string | null;
+    rematchDeadlineEpochMs?: number | string | null;
     afkTimeoutSeconds?: number | string | null;
     timedOutPlayerIds?: Array<number | string | null> | null;
     lastMoveEvent?: LastMoveEventSignal | null;
@@ -103,6 +110,12 @@ type GameRuntimeConfigResponse = {
     caboRevealSeconds?: number | string | null;
     afkTimeoutSeconds?: number | string | null;
     rematchDecisionSeconds?: number | string | null;
+    rematchDecisionRemainingSeconds?: number | string | null;
+    rematchRemainingSeconds?: number | string | null;
+    rematchDecisionDeadlineMs?: number | string | null;
+    rematchDecisionDeadlineEpochMs?: number | string | null;
+    rematchDeadlineMs?: number | string | null;
+    rematchDeadlineEpochMs?: number | string | null;
 };
 
 type WaitingLobbyPlayerRow = {
@@ -341,6 +354,97 @@ function extractGameStateRecords(value: unknown): Record<string, unknown>[] {
         records.push(nested as Record<string, unknown>);
     }
     return records;
+}
+
+function extractRematchRemainingSeconds(value: unknown): number | null {
+    const keys = [
+        "rematchDecisionRemainingSeconds",
+        "rematchRemainingSeconds",
+        "remainingRematchSeconds",
+        "rematchCountdownSeconds",
+        "remainingDecisionSeconds",
+    ] as const;
+    for (const record of extractGameStateRecords(value)) {
+        for (const key of keys) {
+            const parsed = Number(record[key]);
+            if (Number.isFinite(parsed) && parsed >= 0) {
+                return Math.ceil(parsed);
+            }
+        }
+    }
+    return null;
+}
+
+function toEpochMsOrNull(value: unknown): number | null {
+    if (value == null || (typeof value === "string" && value.trim() === "")) {
+        return null;
+    }
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+        // Seconds-like values are typically <= 10 digits, convert to ms.
+        return numeric < 1_000_000_000_000 ? Math.floor(numeric * 1000) : Math.floor(numeric);
+    }
+    if (typeof value === "string") {
+        const parsed = Date.parse(value);
+            if (Number.isFinite(parsed) && parsed > 0) {
+                return parsed;
+            }
+    }
+    return null;
+}
+
+function extractRematchDeadlineMs(value: unknown): number | null {
+    const keys = [
+        "rematchDecisionDeadlineMs",
+        "rematchDecisionDeadlineEpochMs",
+        "rematchDeadlineMs",
+        "rematchDeadlineEpochMs",
+        "rematchDecisionDeadline",
+        "rematchDeadline",
+    ] as const;
+    for (const record of extractGameStateRecords(value)) {
+        for (const key of keys) {
+            const epochMs = toEpochMsOrNull(record[key]);
+            if (epochMs != null) {
+                return epochMs;
+            }
+        }
+    }
+    return null;
+}
+
+const REMATCH_DEADLINE_STORAGE_PREFIX = "cabo:rematchDeadlineMs:";
+
+function toRematchDeadlineStorageKey(gameId: string): string {
+    return `${REMATCH_DEADLINE_STORAGE_PREFIX}${gameId.trim()}`;
+}
+
+function readStoredRematchDeadlineMs(gameId: string): number | null {
+    if (typeof window === "undefined") {
+        return null;
+    }
+    const key = toRematchDeadlineStorageKey(gameId);
+    const raw = String(window.localStorage.getItem(key) ?? "").trim();
+    if (!raw) {
+        return null;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+    return parsed;
+}
+
+function writeStoredRematchDeadlineMs(gameId: string, deadlineMs: number | null): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+    const key = toRematchDeadlineStorageKey(gameId);
+    if (deadlineMs == null || !Number.isFinite(deadlineMs) || deadlineMs <= 0) {
+        window.localStorage.removeItem(key);
+        return;
+    }
+    window.localStorage.setItem(key, String(Math.floor(deadlineMs)));
 }
 
 function extractGameStatePlayers(value: unknown): Record<string, unknown>[] {
@@ -1147,7 +1251,6 @@ const Game = () => {
       const lastAuthoritativeResyncMsRef = useRef<number>(0);
       const hasSeenCaboCallStateRef = useRef<boolean>(false);
       const previousCaboCalledStateRef = useRef<boolean>(false);
-      const gameStartSoundPlayedForGameRef = useRef<string>("");
       const previousCaboRevealWinnerStageRef = useRef<boolean>(false);
       const gameAfkWarningLoopActiveRef = useRef<boolean>(false);
       const [orderedPlayerIds, setOrderedPlayerIds] = useState<number[]>([]);
@@ -1185,6 +1288,55 @@ const Game = () => {
       const rematchDeadlineMsRef = useRef<number | null>(null);
       const consecutiveNotMyTurnPollsRef = useRef<number>(0);
       const consecutiveNoOwnerProbePollsRef = useRef<number>(0);
+      const caboRevealPlayerNameRef = useRef<HTMLParagraphElement | null>(null);
+      const [caboRevealPlayerNameFontPx, setCaboRevealPlayerNameFontPx] = useState<number>(56);
+
+      const applyRematchTimingFromPayload = useCallback((payload: unknown): boolean => {
+          const resolvedDeadlineMs = extractRematchDeadlineMs(payload);
+          if (resolvedDeadlineMs != null) {
+              rematchDeadlineMsRef.current = resolvedDeadlineMs;
+              writeStoredRematchDeadlineMs(gameId, resolvedDeadlineMs);
+              const remainingMs = Math.max(0, resolvedDeadlineMs - Date.now());
+              setRematchCountdown(Math.max(0, Math.ceil(remainingMs / 1000)));
+              return true;
+          }
+
+          const resolvedRemainingSeconds = extractRematchRemainingSeconds(payload);
+          if (resolvedRemainingSeconds != null) {
+              const computedDeadlineMs = Date.now() + (resolvedRemainingSeconds * 1000);
+              rematchDeadlineMsRef.current = computedDeadlineMs;
+              writeStoredRematchDeadlineMs(gameId, computedDeadlineMs);
+              setRematchCountdown(Math.max(0, Math.ceil(resolvedRemainingSeconds)));
+              return true;
+          }
+
+          return false;
+      }, [gameId]);
+
+      const loadAuthoritativeRematchTiming = useCallback(async (authToken: string): Promise<boolean> => {
+          if (!gameId || !authToken) {
+              return false;
+          }
+          const endpoints = [
+              `/games/${gameId}/rematch/config`,
+              `/games/${gameId}/state`,
+              `/games/${gameId}`,
+          ];
+          for (const endpoint of endpoints) {
+              try {
+                  const payload = await apiService.getWithAuth<unknown>(endpoint, authToken);
+                  if (applyRematchTimingFromPayload(payload)) {
+                      return true;
+                  }
+              } catch (error) {
+                  const status = (error as ApplicationError)?.status;
+                  if (status === 403 || status === 404 || status === 405 || status === 501) {
+                      continue;
+                  }
+              }
+          }
+          return false;
+      }, [apiService, applyRematchTimingFromPayload, gameId]);
 
       const parsedSelfUserId = Number(userId);
       const selfUserId = userId.trim() !== "" && Number.isFinite(parsedSelfUserId)
@@ -1572,17 +1724,6 @@ const Game = () => {
           previousCaboCalledStateRef.current = isCaboCalledGlobal;
       }, [isCaboCalledGlobal]);
 
-      useEffect(() => {
-          const normalizedGameId = String(gameId ?? "").trim();
-          if (!normalizedGameId) {
-              return;
-          }
-          if (gameStatus === "intro" && gameStartSoundPlayedForGameRef.current !== normalizedGameId) {
-              gameStartSoundPlayedForGameRef.current = normalizedGameId;
-              playSharedCaboSoundEffect("game_start");
-          }
-      }, [gameId, gameStatus]);
-
       const applyDrawnCardState = (nextDrawnCard: Card | null, sourceHint: DrawSource | null = null) => {
           setDrawnCard(nextDrawnCard);
           drawnCardPresentRef.current = nextDrawnCard != null;
@@ -1809,6 +1950,7 @@ const Game = () => {
                           .catch(() => {
                               applyDrawnCardState(null);
                           }),
+                      loadAuthoritativeRematchTiming(authToken),
                   ]);
                   client.subscribe("/user/queue/game-state", (message) => {
                       try {
@@ -1870,6 +2012,7 @@ const Game = () => {
                           if (Number.isFinite(nextRematchSeconds) && nextRematchSeconds > 0) {
                               setRematchDecisionDuration(Math.floor(nextRematchSeconds));
                           }
+                          applyRematchTimingFromPayload(payload);
                           const nextCaboRevealSeconds = Number(payload?.caboRevealSeconds);
                           if (Number.isFinite(nextCaboRevealSeconds) && nextCaboRevealSeconds > 0) {
                               setCaboRevealDurationSeconds(Math.floor(nextCaboRevealSeconds));
@@ -2540,27 +2683,57 @@ const Game = () => {
               setRematchCountdown(0);
               setMyRematchDecision(null);
               rematchDeadlineMsRef.current = null;
+              if (gameId) {
+                  writeStoredRematchDeadlineMs(gameId, null);
+              }
               return;
+          }
+
+          if (rematchDeadlineMsRef.current == null) {
+              const storedDeadlineMs = readStoredRematchDeadlineMs(gameId);
+              if (storedDeadlineMs != null) {
+                  rematchDeadlineMsRef.current = storedDeadlineMs;
+                  const storedRemainingMs = Math.max(0, storedDeadlineMs - Date.now());
+                  setRematchCountdown(Math.max(0, Math.ceil(storedRemainingMs / 1000)));
+              }
           }
 
           let active = true;
           const loadRematchConfig = async () => {
               try {
-                  const response = await apiService.getWithAuth<{ decisionSeconds?: number }>(
+                  const response = await apiService.getWithAuth<GameRuntimeConfigResponse & { decisionSeconds?: number | string | null }>(
                       `/games/${gameId}/rematch/config`,
                       token
                   );
-                  const configuredSeconds = Number(response?.decisionSeconds);
+                  const configuredSeconds = Number(response?.decisionSeconds ?? response?.rematchDecisionSeconds);
                   if (active && Number.isFinite(configuredSeconds) && configuredSeconds > 0) {
                       setRematchDecisionDuration(Math.floor(configuredSeconds));
                   }
+                  if (active) {
+                      applyRematchTimingFromPayload(response);
+                  }
               } catch {
-                  // fallback to last known local default
+                  // continue with additional probes and fallback
+              }
+
+              if (!active) {
+                  return;
+              }
+
+              await loadAuthoritativeRematchTiming(token);
+              if (!active) {
+                  return;
+              }
+
+              if (rematchDeadlineMsRef.current == null) {
+                  const fallbackDeadlineMs = Date.now() + (rematchDecisionDuration * 1000);
+                  rematchDeadlineMsRef.current = fallbackDeadlineMs;
+                  writeStoredRematchDeadlineMs(gameId, fallbackDeadlineMs);
+                  setRematchCountdown(rematchDecisionDuration);
               }
           };
           void loadRematchConfig();
 
-          rematchDeadlineMsRef.current = Date.now() + (rematchDecisionDuration * 1000);
           const tick = () => {
               const deadline = rematchDeadlineMsRef.current;
               if (deadline == null) {
@@ -2577,7 +2750,15 @@ const Game = () => {
               active = false;
               window.clearInterval(intervalId);
           };
-      }, [apiService, gameId, token, isAwaitingRematchDecision, rematchDecisionDuration]);
+      }, [
+          apiService,
+          applyRematchTimingFromPayload,
+          gameId,
+          isAwaitingRematchDecision,
+          loadAuthoritativeRematchTiming,
+          rematchDecisionDuration,
+          token,
+      ]);
 
       useEffect(() => {
           if (gameStatus !== "round_ended" || !gameId || !token) {
@@ -3860,17 +4041,21 @@ const canCallCabo =
     !isCallingCabo &&
     !isPostRoundPhase;
 
-const callCabo = () => {
+const callCabo = async () => {
     if (!canCallCabo || !gameId || !token || isCaboCalledGlobal) {
         return;
     }
-    if (typeof window !== "undefined") {
-        const confirmed = window.confirm(
-            "Are you sure you want to call Cabo? This ends your turn immediately and starts the last round."
-        );
-        if (!confirmed) {
-            return;
-        }
+    const callCaboConfirmTimeoutSeconds = resolveConfirmationTimeoutSeconds(
+        10,
+        Math.ceil(Math.max(0, turnTimeLeftMs) / 1000),
+    );
+    const confirmed = await showTimedConfirmation({
+        title: "Are you sure you want to call Cabo? This ends your turn immediately and starts the last round.",
+        timeoutSeconds: callCaboConfirmTimeoutSeconds,
+        danger: true,
+    });
+    if (!confirmed) {
+        return;
     }
 
     setIsCallingCabo(true);
@@ -3983,13 +4168,15 @@ const INTRO_TITLE_DURATION_MS = 2000;
 const INTRO_PLAYER_REVEAL_INTERVAL_MS = 2000;
 const INTRO_WAVE_FRAME_DURATION_MS = 200;
 const CABO_REVEAL_OPENING_MS = 4000;
-const CABO_REVEAL_PLAYER_NAME_AND_CARDS_MS = 2000;
+const CABO_REVEAL_PLAYER_NAME_INTRO_MS = 1000;
 const CABO_REVEAL_PLAYER_CARD_REVEAL_MS = 4000;
-const CABO_REVEAL_PLAYER_POINTS_REVEAL_MS = 4000;
-const CABO_REVEAL_PLAYER_NAME_TRANSITION_MS = 1000;
-const CABO_REVEAL_OUTRO_NAME_EXIT_MS = 1000;
-const CABO_REVEAL_WINNER_CELEBRATION_MS = 5000;
-const CABO_REVEAL_OUTRO_BUFFER_MS = 1000;
+const CABO_REVEAL_PLAYER_TOTAL_SHOW_MS = 4000;
+const CABO_REVEAL_PLAYER_OUTRO_MS = 1000;
+const CABO_REVEAL_POINT_DELAY_AFTER_FLIP_MS = 500;
+const CABO_REVEAL_POINT_FADE_MS = 500;
+const CABO_REVEAL_TOTAL_FADE_MS = 500;
+const CABO_REVEAL_WINNER_CELEBRATION_MS = 6000;
+const CABO_REVEAL_WINNER_FADE_MS = 500;
 
 const visibleIntroPlayersCount = useMemo(() => {
     if (introElapsedMs < INTRO_TITLE_DURATION_MS) {
@@ -4065,6 +4252,16 @@ const caboRevealPlayers = useMemo(() => {
         const roundScoreText = displayRoundScore == null
             ? "-"
             : String(Math.trunc(displayRoundScore));
+        const cardPointValues = cards.map((card) => {
+            const parsed = toFiniteScore(card.value);
+            return parsed == null ? null : Math.trunc(parsed);
+        });
+        const cardPointsTotal = cardPointValues.every((value) => value != null)
+            ? cardPointValues.reduce((sum, value) => sum + Number(value), 0)
+            : null;
+        const cardPointsTotalText = cardPointsTotal == null
+            ? "-"
+            : String(cardPointsTotal);
 
         const mappedName = String(playerNamesById[id] ?? "").trim();
         const snapshotName = String(scoreEntry?.username ?? "").trim();
@@ -4078,6 +4275,8 @@ const caboRevealPlayers = useMemo(() => {
             cards,
             pointsToReveal,
             roundScoreText,
+            cardPointValues,
+            cardPointsTotalText,
             roundScoreLabel: formatPointsLabel(displayRoundScore),
             isSpecialWin: scoreEntry?.isSpecialWin === true,
         };
@@ -4127,57 +4326,48 @@ const caboRevealTimeline = useMemo(() => {
     const plannedTotalMs =
         CABO_REVEAL_OPENING_MS +
         (playerCount * (
-            CABO_REVEAL_PLAYER_NAME_AND_CARDS_MS +
+            CABO_REVEAL_PLAYER_NAME_INTRO_MS +
             CABO_REVEAL_PLAYER_CARD_REVEAL_MS +
-            CABO_REVEAL_PLAYER_POINTS_REVEAL_MS
+            CABO_REVEAL_PLAYER_TOTAL_SHOW_MS +
+            CABO_REVEAL_PLAYER_OUTRO_MS
         )) +
-        CABO_REVEAL_OUTRO_NAME_EXIT_MS +
-        CABO_REVEAL_WINNER_CELEBRATION_MS +
-        CABO_REVEAL_OUTRO_BUFFER_MS;
+        CABO_REVEAL_WINNER_CELEBRATION_MS;
     const availableMs = Math.max(1000, caboRevealDurationSeconds * 1000);
     const scale = plannedTotalMs > availableMs ? availableMs / plannedTotalMs : 1;
 
     const openingTitleMs = CABO_REVEAL_OPENING_MS * scale;
-    const playerNameAndCardsMs = CABO_REVEAL_PLAYER_NAME_AND_CARDS_MS * scale;
+    const playerNameIntroMs = CABO_REVEAL_PLAYER_NAME_INTRO_MS * scale;
     const playerCardRevealMs = CABO_REVEAL_PLAYER_CARD_REVEAL_MS * scale;
-    const playerPointsRevealMs = CABO_REVEAL_PLAYER_POINTS_REVEAL_MS * scale;
-    const playerNameTransitionMs = Math.min(
-        playerNameAndCardsMs,
-        CABO_REVEAL_PLAYER_NAME_TRANSITION_MS * scale,
-    );
-    const perPlayerTotalMs = playerNameAndCardsMs + playerCardRevealMs + playerPointsRevealMs;
-    const outroNameExitMs = CABO_REVEAL_OUTRO_NAME_EXIT_MS * scale;
-    const outroBufferMs = CABO_REVEAL_OUTRO_BUFFER_MS * scale;
-    let winnerCelebrationMs = CABO_REVEAL_WINNER_CELEBRATION_MS * scale;
-
-    const totalWithoutExtraMs =
-        openingTitleMs +
-        (playerCount * perPlayerTotalMs) +
-        outroNameExitMs +
-        winnerCelebrationMs +
-        outroBufferMs;
-    if (availableMs > totalWithoutExtraMs) {
-        winnerCelebrationMs += availableMs - totalWithoutExtraMs;
-    }
+    const playerTotalShowMs = CABO_REVEAL_PLAYER_TOTAL_SHOW_MS * scale;
+    const playerOutroMs = CABO_REVEAL_PLAYER_OUTRO_MS * scale;
+    const perPlayerTotalMs = playerNameIntroMs + playerCardRevealMs + playerTotalShowMs + playerOutroMs;
+    const winnerCelebrationMs = CABO_REVEAL_WINNER_CELEBRATION_MS * scale;
+    const playerPointDelayMs = CABO_REVEAL_POINT_DELAY_AFTER_FLIP_MS * scale;
+    const playerPointFadeMs = CABO_REVEAL_POINT_FADE_MS * scale;
+    const playerTotalFadeMs = CABO_REVEAL_TOTAL_FADE_MS * scale;
+    const winnerFadeMs = CABO_REVEAL_WINNER_FADE_MS * scale;
 
     const openingEndMs = openingTitleMs;
     const playersEndMs = openingEndMs + (playerCount * perPlayerTotalMs);
-    const outroNameExitEndMs = playersEndMs + outroNameExitMs;
-    const winnerEndMs = outroNameExitEndMs + winnerCelebrationMs;
-    const timelineEndMs = winnerEndMs + outroBufferMs;
+    const winnerEndMs = playersEndMs + winnerCelebrationMs;
+    const timelineEndMs = winnerEndMs;
 
     return {
         playerCount,
         openingEndMs,
         playersEndMs,
-        outroNameExitEndMs,
         winnerEndMs,
         timelineEndMs,
         perPlayerTotalMs,
-        playerNameAndCardsMs,
+        playerNameIntroMs,
         playerCardRevealMs,
-        playerPointsRevealMs,
-        playerNameTransitionMs,
+        playerTotalShowMs,
+        playerOutroMs,
+        playerPointDelayMs,
+        playerPointFadeMs,
+        playerTotalFadeMs,
+        winnerCelebrationMs,
+        winnerFadeMs,
         playerCardFlipStepMs: HAND_SIZE > 0 ? playerCardRevealMs / HAND_SIZE : 0,
     };
 }, [HAND_SIZE, caboRevealDurationSeconds, caboRevealPlayers.length]);
@@ -4191,14 +4381,9 @@ const caboRevealIsPlayerStage =
     !caboRevealIsOpeningStage &&
     caboRevealElapsedClampedMs < caboRevealTimeline.playersEndMs &&
     caboRevealTimeline.playerCount > 0;
-const caboRevealIsOutroNameExitStage =
-    caboRevealTimeline.playerCount > 0 &&
-    caboRevealElapsedClampedMs >= caboRevealTimeline.playersEndMs &&
-    caboRevealElapsedClampedMs < caboRevealTimeline.outroNameExitEndMs;
 const caboRevealIsWinnerStage =
     !caboRevealIsOpeningStage &&
-    !caboRevealIsPlayerStage &&
-    !caboRevealIsOutroNameExitStage;
+    !caboRevealIsPlayerStage;
 
 const caboRevealPlayerStageElapsedMs = Math.max(
     0,
@@ -4214,38 +4399,195 @@ const caboRevealActivePlayerElapsedMs = caboRevealIsPlayerStage
     ? caboRevealPlayerStageElapsedMs - (caboRevealActivePlayerIndex * caboRevealTimeline.perPlayerTotalMs)
     : caboRevealTimeline.perPlayerTotalMs;
 const caboRevealActivePlayer = caboRevealPlayers[caboRevealActivePlayerIndex] ?? null;
-const caboRevealPreviousPlayer =
-    caboRevealIsPlayerStage && caboRevealActivePlayerIndex > 0
-        ? caboRevealPlayers[caboRevealActivePlayerIndex - 1]
-        : null;
-const caboRevealNameTransitionActive =
-    caboRevealIsPlayerStage &&
-    caboRevealActivePlayerElapsedMs < caboRevealTimeline.playerNameTransitionMs;
-
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const caboRevealNameIntroEndMs = caboRevealTimeline.playerNameIntroMs;
+const caboRevealCardRevealStartMs = caboRevealNameIntroEndMs;
+const caboRevealCardRevealEndMs = caboRevealCardRevealStartMs + caboRevealTimeline.playerCardRevealMs;
+const caboRevealTotalShowStartMs = caboRevealCardRevealEndMs;
+const caboRevealTotalShowEndMs = caboRevealTotalShowStartMs + caboRevealTimeline.playerTotalShowMs;
+const caboRevealOutroStartMs = caboRevealTotalShowEndMs;
+const caboRevealNameIntroOpacity = caboRevealTimeline.playerNameIntroMs > 0
+    ? clamp01(caboRevealActivePlayerElapsedMs / caboRevealTimeline.playerNameIntroMs)
+    : 1;
+const caboRevealOutroProgress = caboRevealTimeline.playerOutroMs > 0
+    ? clamp01((caboRevealActivePlayerElapsedMs - caboRevealOutroStartMs) / caboRevealTimeline.playerOutroMs)
+    : 1;
+const caboRevealFadeOutOpacity = caboRevealActivePlayerElapsedMs >= caboRevealOutroStartMs
+    ? (1 - caboRevealOutroProgress)
+    : 1;
+const caboRevealNameOpacity = caboRevealIsPlayerStage
+    ? (caboRevealActivePlayerElapsedMs < caboRevealNameIntroEndMs ? caboRevealNameIntroOpacity : caboRevealFadeOutOpacity)
+    : 0;
+const caboRevealCardsRowOpacity = caboRevealNameOpacity;
 const caboRevealCardRevealElapsedMs = Math.max(
     0,
-    caboRevealActivePlayerElapsedMs - caboRevealTimeline.playerNameAndCardsMs,
+    caboRevealActivePlayerElapsedMs - caboRevealCardRevealStartMs,
 );
 const caboRevealVisibleCardCount = caboRevealIsPlayerStage && caboRevealTimeline.playerCardFlipStepMs > 0
-    ? Math.max(
-        0,
-        Math.min(
-            HAND_SIZE,
-            caboRevealCardRevealElapsedMs > 0
-                ? Math.floor(caboRevealCardRevealElapsedMs / caboRevealTimeline.playerCardFlipStepMs) + 1
-                : 0,
-        ),
+    ? (
+        caboRevealActivePlayerElapsedMs < caboRevealCardRevealStartMs
+            ? 0
+            : caboRevealActivePlayerElapsedMs < caboRevealCardRevealEndMs
+                ? Math.max(
+                    0,
+                    Math.min(
+                        HAND_SIZE,
+                        Math.floor(caboRevealCardRevealElapsedMs / caboRevealTimeline.playerCardFlipStepMs) + 1,
+                    ),
+                )
+                : caboRevealActivePlayerElapsedMs < caboRevealOutroStartMs
+                    ? HAND_SIZE
+                    : 0
     )
     : 0;
-const caboRevealPointsStageElapsedMs = Math.max(
-    0,
-    caboRevealActivePlayerElapsedMs -
-        (caboRevealTimeline.playerNameAndCardsMs + caboRevealTimeline.playerCardRevealMs),
+const caboRevealPointOpacities = Array.from({ length: HAND_SIZE }, (_, index) => {
+    if (!caboRevealIsPlayerStage || caboRevealTimeline.playerCardFlipStepMs <= 0) {
+        return 0;
+    }
+    const flipStartMs = caboRevealCardRevealStartMs + (index * caboRevealTimeline.playerCardFlipStepMs);
+    const pointFadeStartMs = flipStartMs + caboRevealTimeline.playerPointDelayMs;
+    const pointFadeDurationMs = Math.max(1, caboRevealTimeline.playerPointFadeMs);
+    if (caboRevealActivePlayerElapsedMs < pointFadeStartMs) {
+        return 0;
+    }
+    if (caboRevealActivePlayerElapsedMs < pointFadeStartMs + pointFadeDurationMs) {
+        return clamp01((caboRevealActivePlayerElapsedMs - pointFadeStartMs) / pointFadeDurationMs);
+    }
+    if (caboRevealActivePlayerElapsedMs < caboRevealOutroStartMs) {
+        return 1;
+    }
+    return caboRevealFadeOutOpacity;
+});
+const caboRevealVisiblePointCount = caboRevealPointOpacities.filter((opacity) => opacity > 0.001).length;
+const caboRevealPointsRowOpacity = caboRevealNameOpacity;
+const caboRevealTotalFadeDurationMs = Math.max(
+    1,
+    Math.min(caboRevealTimeline.playerTotalFadeMs, caboRevealTimeline.playerTotalShowMs / 2),
 );
-const caboRevealPointsFadeProgress = caboRevealTimeline.playerPointsRevealMs > 0
-    ? Math.max(0, Math.min(1, caboRevealPointsStageElapsedMs / caboRevealTimeline.playerPointsRevealMs))
+const caboRevealTotalOpacity = (() => {
+    if (!caboRevealIsPlayerStage) {
+        return 0;
+    }
+    if (caboRevealActivePlayerElapsedMs < caboRevealTotalShowStartMs) {
+        return 0;
+    }
+    if (caboRevealActivePlayerElapsedMs >= caboRevealTotalShowEndMs) {
+        return 0;
+    }
+    if (caboRevealActivePlayerElapsedMs < caboRevealTotalShowStartMs + caboRevealTotalFadeDurationMs) {
+        return clamp01(
+            (caboRevealActivePlayerElapsedMs - caboRevealTotalShowStartMs) / caboRevealTotalFadeDurationMs,
+        );
+    }
+    if (caboRevealActivePlayerElapsedMs > caboRevealTotalShowEndMs - caboRevealTotalFadeDurationMs) {
+        return clamp01(
+            (caboRevealTotalShowEndMs - caboRevealActivePlayerElapsedMs) / caboRevealTotalFadeDurationMs,
+        );
+    }
+    return 1;
+})();
+const caboRevealWinnerStageElapsedMs = caboRevealIsWinnerStage
+    ? Math.max(0, caboRevealElapsedClampedMs - caboRevealTimeline.playersEndMs)
+    : 0;
+const caboRevealWinnerOpacity = caboRevealIsWinnerStage
+    ? (() => {
+        const fadeDuration = Math.max(1, Math.min(caboRevealTimeline.winnerFadeMs, caboRevealTimeline.winnerCelebrationMs / 2));
+        const fadeOutStart = Math.max(0, caboRevealTimeline.winnerCelebrationMs - fadeDuration);
+        if (caboRevealWinnerStageElapsedMs < fadeDuration) {
+            return clamp01(caboRevealWinnerStageElapsedMs / fadeDuration);
+        }
+        if (caboRevealWinnerStageElapsedMs >= fadeOutStart) {
+            return clamp01((caboRevealTimeline.winnerCelebrationMs - caboRevealWinnerStageElapsedMs) / fadeDuration);
+        }
+        return 1;
+    })()
     : 0;
 const caboRevealPlaceholderFrame = 1 + (Math.floor(caboRevealElapsedClampedMs / 110) % 9);
+
+useLayoutEffect(() => {
+    if (!isCaboRevealPhase || !caboRevealIsPlayerStage) {
+        return;
+    }
+
+    const nameElement = caboRevealPlayerNameRef.current;
+    const laneElement = nameElement?.parentElement;
+    if (!nameElement || !laneElement) {
+        return;
+    }
+
+    let animationFrameId: number | null = null;
+
+    const fitToLane = () => {
+        const usernameText = String(caboRevealActivePlayer?.username ?? "").trim();
+        if (!usernameText) {
+            setCaboRevealPlayerNameFontPx(56);
+            return;
+        }
+
+        const availableWidth = Math.max(0, laneElement.clientWidth - 8);
+        const availableHeight = Math.max(0, laneElement.clientHeight - 8);
+        if (availableWidth < 8 || availableHeight < 8) {
+            return;
+        }
+
+        const computed = window.getComputedStyle(nameElement);
+        const probe = document.createElement("span");
+        probe.textContent = usernameText;
+        probe.style.position = "absolute";
+        probe.style.visibility = "hidden";
+        probe.style.pointerEvents = "none";
+        probe.style.whiteSpace = "nowrap";
+        probe.style.fontFamily = computed.fontFamily;
+        probe.style.fontStyle = computed.fontStyle;
+        probe.style.fontWeight = computed.fontWeight;
+        probe.style.letterSpacing = computed.letterSpacing;
+        probe.style.lineHeight = "1";
+        laneElement.appendChild(probe);
+
+        let low = 12;
+        let high = Math.max(12, Math.floor(Math.min(availableHeight, 220)));
+        let best = low;
+
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            probe.style.fontSize = `${mid}px`;
+            const fits = probe.offsetWidth <= availableWidth && probe.offsetHeight <= availableHeight;
+            if (fits) {
+                best = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
+
+        laneElement.removeChild(probe);
+        setCaboRevealPlayerNameFontPx((prev) => (Math.abs(prev - best) < 0.5 ? prev : best));
+    };
+
+    const scheduleFit = () => {
+        if (animationFrameId != null) {
+            cancelAnimationFrame(animationFrameId);
+        }
+        animationFrameId = window.requestAnimationFrame(() => {
+            fitToLane();
+        });
+    };
+
+    scheduleFit();
+    const resizeObserver = typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            scheduleFit();
+        })
+        : null;
+    resizeObserver?.observe(laneElement);
+
+    return () => {
+        resizeObserver?.disconnect();
+        if (animationFrameId != null) {
+            cancelAnimationFrame(animationFrameId);
+        }
+    };
+}, [caboRevealActivePlayer?.username, caboRevealIsPlayerStage, isCaboRevealPhase]);
 
 useEffect(() => {
     const isWinnerStageActive = isCaboRevealPhase && caboRevealIsWinnerStage;
@@ -4418,7 +4760,7 @@ if (isCaboRevealPhase) {
     const shouldShowSpecialFireworks =
         caboRevealIsPlayerStage &&
         caboRevealActivePlayer?.isSpecialWin === true &&
-        caboRevealPointsFadeProgress > 0;
+        caboRevealVisiblePointCount > 0;
 
     return (
         <div className="cabo-background cabo-background-game">
@@ -4441,28 +4783,18 @@ if (isCaboRevealPhase) {
                 {caboRevealIsPlayerStage && caboRevealActivePlayer && (
                     <div className="game-cabo-reveal-player-stage">
                         <div className="game-cabo-reveal-player-name-lane" aria-live="polite">
-                            {caboRevealPreviousPlayer && caboRevealNameTransitionActive && (
-                                <p
-                                    key={`prev-${caboRevealActivePlayer.userId}`}
-                                    className="game-cabo-reveal-player-name game-cabo-reveal-player-name-exit-right"
-                                >
-                                    {caboRevealPreviousPlayer.username}
-                                </p>
-                            )}
                             <p
                                 key={`current-${caboRevealActivePlayer.userId}`}
-                                className={`game-cabo-reveal-player-name${
-                                    caboRevealNameTransitionActive
-                                        ? " game-cabo-reveal-player-name-enter-left"
-                                        : " game-cabo-reveal-player-name-stable"
-                                }`}
+                                ref={caboRevealPlayerNameRef}
+                                className="game-cabo-reveal-player-name game-cabo-reveal-player-name-stable"
+                                style={{ opacity: caboRevealNameOpacity, fontSize: `${caboRevealPlayerNameFontPx}px` }}
                             >
                                 {caboRevealActivePlayer.username}
                             </p>
                         </div>
 
-                        <div className="game-cabo-reveal-player-main">
-                            <div className="game-cabo-reveal-placeholder-avatar game-cabo-reveal-animation-slot" aria-hidden="true">
+                        <div className="game-cabo-reveal-animation-slot" aria-hidden="true">
+                            <div className="game-cabo-reveal-placeholder-avatar">
                                 <CharacterAvatar
                                     characterId="char01"
                                     primaryColorId="color01"
@@ -4474,99 +4806,81 @@ if (isCaboRevealPhase) {
                                     className="game-cabo-reveal-placeholder-avatar-image"
                                 />
                             </div>
-                            <div className="game-cabo-reveal-cards-block">
-                                <div className="game-cabo-reveal-cards-row" aria-label={`${caboRevealActivePlayer.username} cards`}>
-                                    {caboRevealActivePlayer.cards.map((card, index) => (
-                                        <div key={`${caboRevealActivePlayer.userId}-card-${index}`} className="game-cabo-reveal-card-wrap">
-                                            <CardComponent
-                                                hidden={index >= caboRevealVisibleCardCount}
-                                                value={card.value}
-                                                size="large"
-                                            />
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                            <div
-                                className={`game-cabo-reveal-points${
-                                    caboRevealPointsFadeProgress > 0 ? " game-cabo-reveal-points-visible" : ""
-                                }`}
-                                style={{ opacity: caboRevealPointsFadeProgress }}
-                            >
-                                <p className="game-cabo-reveal-points-row" aria-label="Round score equation">
-                                    {caboRevealActivePlayer.cards.map((card, index) => {
-                                        const parsedValue = toFiniteScore(card.value);
-                                        const cardLabel = parsedValue == null ? "?" : String(Math.trunc(parsedValue));
-                                        return (
-                                            <span key={`${caboRevealActivePlayer.userId}-eq-${index}`} className="game-cabo-reveal-points-term">
-                                                {cardLabel}
-                                            </span>
-                                        );
-                                    })}
-                                    <span className="game-cabo-reveal-points-result">
-                                        = {caboRevealActivePlayer.roundScoreText}
-                                    </span>
-                                </p>
-                                {shouldShowSpecialFireworks && (
-                                    <>
-                                        <div className="game-cabo-reveal-fireworks" aria-hidden="true" />
-                                        <p className="game-cabo-reveal-special-text">Special win!</p>
-                                    </>
-                                )}
-                            </div>
                         </div>
-                    </div>
-                )}
 
-                {caboRevealIsOutroNameExitStage && caboRevealActivePlayer && (
-                    <div className="game-cabo-reveal-outro-shift-stage">
-                        <div className="game-cabo-reveal-player-name-lane">
-                            <p className="game-cabo-reveal-player-name game-cabo-reveal-player-name-exit-right">
-                                {caboRevealActivePlayer.username}
-                            </p>
-                        </div>
-                        <div className="game-cabo-reveal-player-main">
-                            <div className="game-cabo-reveal-placeholder-avatar game-cabo-reveal-animation-slot" aria-hidden="true">
-                                <CharacterAvatar
-                                    characterId="char01"
-                                    primaryColorId="color01"
-                                    variant="waving"
-                                    frame={caboRevealPlaceholderFrame}
-                                    alt=""
-                                    width={200}
-                                    height={200}
-                                    className="game-cabo-reveal-placeholder-avatar-image"
-                                />
-                            </div>
-                            <div className="game-cabo-reveal-cards-block">
-                                <div className="game-cabo-reveal-cards-row game-cabo-reveal-cards-row-placeholder" aria-hidden="true">
-                                    {caboRevealActivePlayer.cards.map((_, index) => (
-                                        <div key={`${caboRevealActivePlayer.userId}-placeholder-${index}`} className="game-cabo-reveal-card-placeholder" />
-                                    ))}
+                        <div
+                            className="game-cabo-reveal-cards-grid-row"
+                            aria-label={`${caboRevealActivePlayer.username} cards`}
+                            style={{ opacity: caboRevealCardsRowOpacity }}
+                        >
+                            {caboRevealActivePlayer.cards.map((card, index) => (
+                                <div
+                                    key={`${caboRevealActivePlayer.userId}-card-${index}`}
+                                    className="game-cabo-reveal-card-lane"
+                                    style={{ gridColumn: `${(index * 2) + 1}` }}
+                                >
+                                    <div className="game-cabo-reveal-grid-card-wrap">
+                                        <CardComponent
+                                            hidden={index >= caboRevealVisibleCardCount}
+                                            value={card.value}
+                                            size="large"
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="game-cabo-reveal-points game-cabo-reveal-points-placeholder" aria-hidden="true" />
+                            ))}
+                        </div>
+
+                        <div className="game-cabo-reveal-points-grid-row" aria-label="Round score equation" style={{ opacity: caboRevealPointsRowOpacity }}>
+                            {caboRevealActivePlayer.cardPointValues.map((cardLabel, index) => (
+                                <span
+                                    key={`${caboRevealActivePlayer.userId}-eq-${index}`}
+                                    className="game-cabo-reveal-points-term"
+                                    style={{
+                                        gridColumn: `${(index * 2) + 1}`,
+                                        opacity: caboRevealPointOpacities[index] ?? 0,
+                                    }}
+                                >
+                                    {index < caboRevealVisiblePointCount
+                                        ? (cardLabel == null ? "?" : String(cardLabel))
+                                        : "\u00a0"}
+                                </span>
+                            ))}
+                        </div>
+
+                        <p className="game-cabo-reveal-points-result" style={{ opacity: caboRevealTotalOpacity }}>
+                            = {caboRevealActivePlayer.cardPointsTotalText}
+                        </p>
+
+                        <div className="game-cabo-reveal-special-cell">
+                            {shouldShowSpecialFireworks && (
+                                <>
+                                    <div className="game-cabo-reveal-fireworks" aria-hidden="true" />
+                                    <p className="game-cabo-reveal-special-text">Special win!</p>
+                                </>
+                            )}
                         </div>
                     </div>
                 )}
 
                 {caboRevealIsWinnerStage && (
-                    <div className="game-cabo-reveal-winner-stage">
+                    <div className="game-cabo-reveal-winner-stage" style={{ opacity: caboRevealWinnerOpacity }}>
                         <p className="game-cabo-reveal-winner-kicker">Round Winner</p>
                         <h2 className="game-cabo-reveal-winner-name">
                             {caboRevealWinner?.winnerNamesLabel ?? "Waiting for result"}
                         </h2>
-                        <div className="game-cabo-reveal-placeholder-avatar game-cabo-reveal-winner-animation" aria-hidden="true">
-                            <CharacterAvatar
-                                characterId="char01"
-                                primaryColorId="color01"
-                                variant="waving"
-                                frame={caboRevealPlaceholderFrame}
-                                alt=""
-                                width={300}
-                                height={300}
-                                className="game-cabo-reveal-placeholder-avatar-image"
-                            />
+                        <div className="game-cabo-reveal-winner-animation" aria-hidden="true">
+                            <div className="game-cabo-reveal-placeholder-avatar">
+                                <CharacterAvatar
+                                    characterId="char01"
+                                    primaryColorId="color01"
+                                    variant="waving"
+                                    frame={caboRevealPlaceholderFrame}
+                                    alt=""
+                                    width={300}
+                                    height={300}
+                                    className="game-cabo-reveal-placeholder-avatar-image"
+                                />
+                            </div>
                         </div>
                         {caboRevealWinner?.winnerCards && caboRevealWinner.winnerCards.length > 0 && (
                             <div className="game-cabo-reveal-winner-cards-list" aria-label="Winning hand cards">
@@ -4625,75 +4939,528 @@ const playerListRows = tablePlayerIds.map((id) => {
           <div className="cabo-background cabo-background-game">
               <div className="game-overlay">
                   {!isRematchScreenPhase && (
-                      <div className="game-layout-zones" aria-label="Game layout zones">
-                          <section className="game-layout-zone game-layout-zone-top-left" aria-label="Players">
-                              <div className="game-player-list" aria-label="Players in game">
-                                  {playerListRows.map((player) => (
-                                      <div
-                                          key={player.id}
-                                          className={`game-player-list-item${player.isActive ? " active" : ""}${player.isTimedOut ? " timedout" : ""}`}
+                      <>
+                          <div className="game-layout-table" aria-label="Game layout table">
+                              <section className="game-layout-zone game-table-cell game-table-cell-top-left" aria-label="Players">
+                                  <div className="game-player-list" aria-label="Players in game">
+                                      {playerListRows.map((player) => (
+                                          <div
+                                              key={player.id}
+                                              className={`game-player-list-item${player.isActive ? " active" : ""}${player.isTimedOut ? " timedout" : ""}`}
+                                          >
+                                              <span>{player.label}</span>
+                                              {player.isActive && showTurnCountdown && (
+                                                  <span className="game-player-list-timer">{displayedTurnTimeLeft}s</span>
+                                              )}
+                                          </div>
+                                      ))}
+                                  </div>
+                              </section>
+
+                              <section className="game-table-cell game-table-cell-top-center" aria-label="Top opponent">
+                                  {seatAssignments.topOpponentId != null && (
+                                      <div className="top-cards opponent-seat-top">
+                                          <div className="game-opponent-seat-cards game-opponent-seat-cards-top">
+                                              {topSeatDisplayCards.map((card, displayIndex) => {
+                                                  const slotIndex =
+                                                      normalizeHandSlotIndex(card.position, HAND_SIZE) ??
+                                                      (HAND_SIZE - 1 - displayIndex);
+                                                  const highlightedForAbility =
+                                                      canInteractWithAbilityTargets && (
+                                                          gameStatus === "ability_peek_opponent" ||
+                                                          (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
+                                                      );
+                                                  const readableSpyOrientation = shouldUseReadableSpyOrientation(card.faceDown);
+                                                  return (
+                                                      <div
+                                                          key={`top-${slotIndex}`}
+                                                          ref={(element) => {
+                                                              topSeatCardRefs.current[slotIndex] = element;
+                                                          }}
+                                                          className={`game-opponent-card-anchor${
+                                                              readableSpyOrientation ? " game-opponent-card-anchor-readable" : ""
+                                                          }`}
+                                                      >
+                                                          <CardComponent
+                                                              hidden={isPostRoundPhase ? false : card.faceDown}
+                                                              value={card.value}
+                                                              size="small"
+                                                              onClick={() => {
+                                                                  if (canInteractWithAbilityTargets && seatAssignments.topOpponentId != null) {
+                                                                      handleAbilityOpponentCardClick(seatAssignments.topOpponentId, slotIndex);
+                                                                  }
+                                                              }}
+                                                              disabled={
+                                                                  !highlightedForAbility
+                                                              }
+                                                              style={buildOpponentCardStyle(highlightedForAbility)}
+                                                          />
+                                                      </div>
+                                                  );
+                                              })}
+                                          </div>
+                                          <div
+                                              className={`game-opponent-seat-name${
+                                                  currentTurnUserId === seatAssignments.topOpponentId ? " active" : ""
+                                              }`}
+                                              title={playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
+                                          >
+                                              {playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
+                                          </div>
+                                      </div>
+                                  )}
+                              </section>
+
+                              <section className="game-layout-zone game-table-cell game-table-cell-top-right" aria-label="Game actions">
+                                  <div className="top-right-buttons">
+                                      <Button
+                                          onClick={() => {
+                                              if (typeof window !== "undefined") {
+                                                  const defaultX = Math.max(
+                                                      HOW_TO_PLAY_PANEL_MARGIN,
+                                                      window.innerWidth - HOW_TO_PLAY_PANEL_DEFAULT_WIDTH - HOW_TO_PLAY_PANEL_MARGIN,
+                                                  );
+                                                  setHowToPlayPanelPosition({
+                                                      x: defaultX,
+                                                      y: HOW_TO_PLAY_PANEL_DEFAULT_TOP,
+                                                  });
+                                              }
+                                              setIsHowToPlayOpen(true);
+                                          }}
                                       >
-                                          <span>{player.label}</span>
-                                          {player.isActive && showTurnCountdown && (
-                                              <span className="game-player-list-timer">{displayedTurnTimeLeft}s</span>
+                                          How to Play
+                                      </Button>
+                                      <Button onClick={() => void handleShowScores()}>Scores</Button>
+                                      <Button
+                                          type="primary"
+                                          className={`game-call-cabo-btn${isCaboCalledGlobal ? " game-cabo-called-btn" : ""}`}
+                                          disabled={!canCallCabo}
+                                          loading={isCallingCabo}
+                                          onClick={() => void callCabo()}
+                                      >
+                                          {isCaboCalledGlobal
+                                              ? (isCaboForcedByTimeoutGlobal
+                                                  ? "Cabo Called (AFK/DC) - Final Round!"
+                                                  : "Cabo Called - Final Round!")
+                                              : "Call Cabo"}
+                                      </Button>
+                                  </div>
+                              </section>
+
+                              <section className="game-table-cell game-table-cell-middle-left" aria-label="Left opponent">
+                                  {seatAssignments.leftOpponentId != null && (
+                                      <div className="left-cards opponent-seat-left">
+                                          <div className="game-opponent-seat-cards game-opponent-seat-cards-left">
+                                              {leftSeatCards.map((card, index) => {
+                                                  const slotIndex = normalizeHandSlotIndex(card.position, HAND_SIZE) ?? index;
+                                                  const highlightedForAbility =
+                                                      canInteractWithAbilityTargets && (
+                                                          gameStatus === "ability_peek_opponent" ||
+                                                          (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
+                                                      );
+                                                  const readableSpyOrientation = shouldUseReadableSpyOrientation(card.faceDown);
+                                                  return (
+                                                      <div
+                                                          key={`left-${slotIndex}`}
+                                                          ref={(element) => {
+                                                              leftSeatCardRefs.current[slotIndex] = element;
+                                                          }}
+                                                          className={`game-opponent-card-anchor${
+                                                              readableSpyOrientation ? " game-opponent-card-anchor-readable" : ""
+                                                          }`}
+                                                      >
+                                                          <CardComponent
+                                                              hidden={isPostRoundPhase ? false : card.faceDown}
+                                                              value={card.value}
+                                                              size="small"
+                                                              onClick={() => {
+                                                                  if (canInteractWithAbilityTargets && seatAssignments.leftOpponentId != null) {
+                                                                      handleAbilityOpponentCardClick(seatAssignments.leftOpponentId, slotIndex);
+                                                                  }
+                                                              }}
+                                                              disabled={
+                                                                  !highlightedForAbility
+                                                              }
+                                                              style={buildOpponentCardStyle(highlightedForAbility)}
+                                                          />
+                                                      </div>
+                                                  );
+                                              })}
+                                          </div>
+                                          <div
+                                              className={`game-opponent-seat-name${
+                                                  currentTurnUserId === seatAssignments.leftOpponentId ? " active" : ""
+                                              }`}
+                                              title={playerNamesById[seatAssignments.leftOpponentId] ?? `Player ${seatAssignments.leftOpponentId}`}
+                                          >
+                                              {playerNamesById[seatAssignments.leftOpponentId] ?? `Player ${seatAssignments.leftOpponentId}`}
+                                          </div>
+                                      </div>
+                                  )}
+                              </section>
+
+                              <section className="game-table-cell game-table-cell-center" aria-label="Game center">
+                                  <div className="game-center-piece">
+                                      <div className="game-center-row game-center-row-notification">
+                                          <div className="game-center-piles-grid">
+                                              {isCaboCalledGlobal &&
+                                              gameStatus !== "round_ended" &&
+                                              gameStatus !== "round_awaiting_rematch" &&
+                                              gameStatus !== "cabo_reveal" ? (
+                                                  <p
+                                                      className={`game-center-notification game-center-notification-span${
+                                                          isCaboForcedByTimeoutGlobal ? " game-center-notification-timeout" : ""
+                                                      }`}
+                                                  >
+                                                      Cabo Called - Final Round!
+                                                  </p>
+                                              ) : (
+                                                  <p className="game-center-notification game-center-notification-placeholder game-center-notification-span" aria-hidden="true">
+                                                      &nbsp;
+                                                  </p>
+                                              )}
+                                          </div>
+                                      </div>
+
+                                      <div className="game-center-row game-center-row-ability-labels">
+                                          <div className="game-center-piles-grid">
+                                              <p
+                                                  className={`game-center-pile-ability game-center-pile-ability-draw${
+                                                      drawPileAbilityLabel ? " game-center-pile-ability-active" : ""
+                                                  }`}
+                                              >
+                                                  {drawPileAbilityLabel ?? "\u00a0"}
+                                              </p>
+                                          </div>
+                                      </div>
+
+                                      <div className="game-center-row game-center-row-piles">
+                                          <div className="center-area game-center-piles-grid">
+                                              <div className="pile game-center-pile-slot game-center-pile-slot-draw">
+                                                  <div ref={drawPileCardRef} className="game-pile-card-anchor">
+                                                      <CardComponent
+                                                          hidden={!showDrawPileAsRevealedCard}
+                                                          value={showDrawPileAsRevealedCard ? drawnCard?.value : undefined}
+                                                          size="medium"
+                                                          onClick={drawFromPile}
+                                                          draggable={isDrawPileSelectedForTurnAction && canDragSelectedTurnCard}
+                                                          onDragStart={handleTurnCardDragStart}
+                                                          onDragEnd={handleTurnCardDragEnd}
+                                                          disabled={!drawPileCardInteractive}
+                                                          style={isDrawPileSelectedForTurnAction ? selectedPileCardStyle : shouldHighlightPileChoice ? {
+                                                              outline: "3px solid #34e27a",
+                                                              outlineOffset: "2px",
+                                                              boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
+                                                          } : undefined}
+                                                      />
+                                                  </div>
+                                              </div>
+
+                                              <div className="pile game-center-pile-slot game-center-pile-slot-discard">
+                                                  <div ref={discardPileCardRef} className="game-pile-card-anchor">
+                                                      <CardComponent
+                                                          hidden={isDiscardPileTemporarilyHidden}
+                                                          value={visibleDiscardPileCard?.value}
+                                                          size="medium"
+                                                          onClick={() => {
+                                                              if (canDiscardDrawnCard) {
+                                                                  discardDrawnCard();
+                                                                  return;
+                                                              }
+                                                              if (canDrawFromDiscardPile) {
+                                                                  drawFromDiscardPile();
+                                                              }
+                                                          }}
+                                                          draggable={canDrawFromDiscardPile || (isDiscardPileSelectedForTurnAction && canDragSelectedTurnCard)}
+                                                          onDragStart={handleDiscardPileCardDragStart}
+                                                          onDragEnd={handleTurnCardDragEnd}
+                                                          onDragOver={handleDiscardPileDragOver}
+                                                          onDragEnter={handleDiscardPileDragOver}
+                                                          onDragLeave={handleDiscardPileDragLeave}
+                                                          onDrop={handleDiscardPileDrop}
+                                                          disabled={!discardPileCardInteractive}
+                                                          style={isDiscardPileSelectedForTurnAction ? selectedPileCardStyle : isDragOverDiscardPile ? {
+                                                              outline: "3px dashed #ffb14a",
+                                                              outlineOffset: "2px",
+                                                              boxShadow: "0 0 0 2px rgba(255, 177, 74, 0.45), 0 0 18px rgba(255, 177, 74, 0.78)",
+                                                          } : shouldHighlightDiscardPileAsAction ? {
+                                                              outline: "3px solid #34e27a",
+                                                              outlineOffset: "2px",
+                                                              boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
+                                                          } : undefined}
+                                                      />
+                                                  </div>
+                                              </div>
+                                          </div>
+                                      </div>
+
+                                      <div className="game-center-row game-center-row-pile-captions">
+                                          <div className="game-center-piles-grid">
+                                              <p className="game-center-pile-caption game-center-pile-caption-draw">Draw</p>
+                                              <p className="game-center-pile-caption game-center-pile-caption-discard">Discard</p>
+                                          </div>
+                                      </div>
+
+                                      <div className="game-center-row game-center-row-timer-track">
+                                          {showCenterTurnCountdown && (
+                                              <div className="game-center-piles-grid">
+                                                  <div className="game-center-middle-lane-span">
+                                                      <div className="game-turn-progress-track">
+                                                          <div
+                                                              className="game-turn-progress-fill"
+                                                              style={{
+                                                                  width: `${turnProgressPercent}%`,
+                                                              }}
+                                                          />
+                                                      </div>
+                                                  </div>
+                                              </div>
                                           )}
+                                      </div>
+
+                                      <div className="game-center-row game-center-row-timer-text">
+                                          {showCenterTurnCountdown && (
+                                              <p className="game-turn-progress-label">{centerTurnActionLabel}</p>
+                                          )}
+                                      </div>
+
+                                      <div className="game-center-row game-center-row-ability-actions">
+                                          {canShowAbilityChoiceButtons && (
+                                              <div className="game-center-piles-grid">
+                                                  <div className="game-center-action-slot game-center-action-slot-left">
+                                                      <Button
+                                                          type="default"
+                                                          className={`game-turn-action-btn game-turn-action-btn-use${
+                                                              isUseAbilitySelected ? " game-turn-action-btn-use-selected" : ""
+                                                          }`}
+                                                          disabled={isSkippingAbilityChoice || isSubmittingAbility}
+                                                          onClick={chooseUseAbility}
+                                                      >
+                                                          {abilityPhaseLabel === "Ability" ? "Use Ability" : abilityPhaseLabel}
+                                                      </Button>
+                                                  </div>
+                                                  <div className="game-center-action-slot game-center-action-slot-right">
+                                                      <Button
+                                                          type="default"
+                                                          className="game-turn-action-btn game-turn-action-btn-skip"
+                                                          disabled={isSkippingAbilityChoice || isSubmittingAbility || isUseAbilitySelected}
+                                                          loading={isSkippingAbilityChoice}
+                                                          onClick={skipAbilityChoice}
+                                                      >
+                                                          End Turn
+                                                      </Button>
+                                                  </div>
+                                              </div>
+                                          )}
+                                      </div>
+                                  </div>
+                              </section>
+
+                              <section className="game-table-cell game-table-cell-middle-right" aria-label="Right opponent">
+                                  {seatAssignments.rightOpponentId != null && (
+                                      <div className="right-cards opponent-seat-right">
+                                          <div className="game-opponent-seat-cards game-opponent-seat-cards-right">
+                                              {rightSeatCards.map((card, index) => {
+                                                  const slotIndex = normalizeHandSlotIndex(card.position, HAND_SIZE) ?? index;
+                                                  const highlightedForAbility =
+                                                      canInteractWithAbilityTargets && (
+                                                          gameStatus === "ability_peek_opponent" ||
+                                                          (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
+                                                      );
+                                                  const readableSpyOrientation = shouldUseReadableSpyOrientation(card.faceDown);
+                                                  return (
+                                                      <div
+                                                          key={`right-${slotIndex}`}
+                                                          ref={(element) => {
+                                                              rightSeatCardRefs.current[slotIndex] = element;
+                                                          }}
+                                                          className={`game-opponent-card-anchor${
+                                                              readableSpyOrientation ? " game-opponent-card-anchor-readable" : ""
+                                                          }`}
+                                                      >
+                                                          <CardComponent
+                                                              hidden={isPostRoundPhase ? false : card.faceDown}
+                                                              value={card.value}
+                                                              size="small"
+                                                              onClick={() => {
+                                                                  if (canInteractWithAbilityTargets && seatAssignments.rightOpponentId != null) {
+                                                                      handleAbilityOpponentCardClick(seatAssignments.rightOpponentId, slotIndex);
+                                                                  }
+                                                              }}
+                                                              disabled={
+                                                                  !highlightedForAbility
+                                                              }
+                                                              style={buildOpponentCardStyle(highlightedForAbility)}
+                                                          />
+                                                      </div>
+                                                  );
+                                              })}
+                                          </div>
+                                          <div
+                                              className={`game-opponent-seat-name${
+                                                  currentTurnUserId === seatAssignments.rightOpponentId ? " active" : ""
+                                              }`}
+                                              title={playerNamesById[seatAssignments.rightOpponentId] ?? `Player ${seatAssignments.rightOpponentId}`}
+                                          >
+                                              {playerNamesById[seatAssignments.rightOpponentId] ?? `Player ${seatAssignments.rightOpponentId}`}
+                                          </div>
+                                      </div>
+                                  )}
+                              </section>
+
+                              <section className="game-layout-zone game-table-cell game-table-cell-bottom-left" aria-label="Chat">
+                                  <div className="game-chat-zone-card">
+                                      <CaboChatPanel
+                                          sessionId={lobbySessionId}
+                                          token={token}
+                                          userId={userId}
+                                          cooldownSeconds={chatCooldownSeconds}
+                                          variant="game"
+                                          className="game-corner-chat-panel"
+                                      />
+                                  </div>
+                              </section>
+
+                              <section className="game-table-cell game-table-cell-bottom-center" aria-label="Your cards">
+                                  <div className={`bottom-cards${isMyTurnUi ? " game-current-player-highlight" : ""}`}>
+                                      {[...Array(HAND_SIZE)].map((_, i) => {
+                                          const card = myHand[i];
+                                          const isSelectedForSwap = abilitySelectedOwnCardIndex === i;
+                                          const isSwapChoosingOwnCard =
+                                              gameStatus === "ability_swap" && abilitySelectedOwnCardIndex == null;
+                                          const canClickOwnCardForAbility =
+                                              canInteractWithAbilityTargets && (
+                                                  gameStatus === "ability_peek_self" ||
+                                                  isSwapChoosingOwnCard
+                                              );
+                                          const isHighlightedForAbility =
+                                              canClickOwnCardForAbility ||
+                                              (canInteractWithAbilityTargets && gameStatus === "ability_swap" && isSelectedForSwap);
+                                          const isPeekCardSelected = isPeekPhase && peekVisibleCards[i];
+                                          const isPeekCardSelectable =
+                                              isPeekPhase &&
+                                              !isSubmittingInitialPeek &&
+                                              !isPeekCardSelected &&
+                                              revealedPeekCount < 2;
+                                          const isSwapDropTarget =
+                                              (isDraggingTurnCard || isDraggingDiscardPileSwapCard) &&
+                                              (canSwapDrawnCardWithHand || canDrawFromDiscardPile) &&
+                                              dragOverOwnCardIndex === i;
+
+                                          const cardStyle: React.CSSProperties | undefined = isPeekPhase
+                                              ? (isPeekCardSelected ? {
+                                                  outline: "3px solid #e8a87c",
+                                                  outlineOffset: "2px",
+                                                  boxShadow: "0 0 0 2px rgba(232, 168, 124, 0.35)",
+                                              } : isPeekCardSelectable ? {
+                                                  outline: "3px dashed rgba(52, 226, 122, 0.95)",
+                                                  outlineOffset: "2px",
+                                                  boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
+                                              } : {
+                                                  outline: "2px solid rgba(255, 255, 255, 0.75)",
+                                                  outlineOffset: "2px",
+                                              })
+                                              : isHighlightedForAbility ? {
+                                                  outline: (gameStatus === "ability_swap" && isSelectedForSwap)
+                                                      ? "3px solid #e8a87c"
+                                                      : "3px solid #a8b87a",
+                                                  outlineOffset: "2px",
+                                              } : shouldHighlightOwnCardsForTurnSwap ? {
+                                                  outline: "3px solid #34e27a",
+                                                  outlineOffset: "2px",
+                                                  boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.25)",
+                                              } : undefined;
+                                          const finalCardStyle: React.CSSProperties | undefined = isSwapDropTarget ? {
+                                              ...(cardStyle ?? {}),
+                                              outline: "3px dashed #ffb14a",
+                                              outlineOffset: "2px",
+                                              boxShadow: "0 0 0 2px rgba(255, 177, 74, 0.48), 0 0 14px rgba(255, 177, 74, 0.72)",
+                                          } : cardStyle;
+
+                                          return (
+                                              <div
+                                                  key={i}
+                                                  ref={(element) => {
+                                                      ownHandCardRefs.current[i] = element;
+                                                  }}
+                                                  className="game-own-card-anchor"
+                                              >
+                                                  <CardComponent
+                                                      hidden={isPostRoundPhase ? false : !peekVisibleCards[i]}
+                                                      value={card?.value}
+                                                      size="large"
+                                                      onClick={() => {
+                                                          if (isPeekPhase) {
+                                                              handlePeekCardClick(i);
+                                                              return;
+                                                          }
+
+                                                          if (canClickOwnCardForAbility) {
+                                                              handleAbilityOwnCardClick(i);
+                                                              return;
+                                                          }
+
+                                                          if (canSwapDrawnCardWithHand) {
+                                                              swapDrawnCardWithHand(i);
+                                                              return;
+                                                          }
+                                                      }}
+                                                      disabled={isPeekPhase
+                                                          ? (isSubmittingInitialPeek || isPeekCardSelected || (!isPeekCardSelected && revealedPeekCount >= 2))
+                                                          : !(canClickOwnCardForAbility || isHighlightedForAbility || canSwapDrawnCardWithHand)}
+                                                      onDragOver={(event) => handleOwnCardDragOver(event, i)}
+                                                      onDragEnter={(event) => handleOwnCardDragOver(event, i)}
+                                                      onDragLeave={() => handleOwnCardDragLeave(i)}
+                                                      onDrop={(event) => handleOwnCardDrop(event, i)}
+                                                      style={finalCardStyle}
+                                                  />
+                                              </div>
+                                          );
+                                      })}
+                                  </div>
+                              </section>
+
+                              <section className="game-layout-zone game-table-cell game-table-cell-bottom-right" aria-label="Audio controls">
+                                  <div className="game-audio-zone-card">
+                                      <InlineMusicPlayer variant="game" controlsDisabled={isIntroPhase || isRematchScreenPhase} />
+                                  </div>
+                              </section>
+                          </div>
+
+                          {flyingCardAnimations.length > 0 && (
+                              <div className="game-flying-card-layer" aria-hidden="true">
+                                  {flyingCardAnimations.map((animation) => (
+                                      <div
+                                          key={animation.id}
+                                          className={`game-flying-card${
+                                              animation.fadeMode === "late"
+                                                  ? " game-flying-card-late-fade"
+                                                  : ""
+                                          }`}
+                                          style={{
+                                              left: `${animation.startX}px`,
+                                              top: `${animation.startY}px`,
+                                              width: `${animation.width}px`,
+                                              height: `${animation.height}px`,
+                                              ["--fly-delta-x" as string]: `${animation.deltaX}px`,
+                                              ["--fly-delta-y" as string]: `${animation.deltaY}px`,
+                                          } as React.CSSProperties}
+                                      >
+                                          <CardComponent
+                                              hidden={animation.hidden}
+                                              value={animation.value}
+                                              size="medium"
+                                              style={{
+                                                  width: "100%",
+                                                  height: "100%",
+                                                  pointerEvents: "none",
+                                              }}
+                                          />
                                       </div>
                                   ))}
                               </div>
-                          </section>
-                          <section className="game-layout-zone game-layout-zone-top-right" aria-label="Game actions">
-                              <div className="top-right-buttons">
-                                  <Button
-                                      onClick={() => {
-                                          if (typeof window !== "undefined") {
-                                              const defaultX = Math.max(
-                                                  HOW_TO_PLAY_PANEL_MARGIN,
-                                                  window.innerWidth - HOW_TO_PLAY_PANEL_DEFAULT_WIDTH - HOW_TO_PLAY_PANEL_MARGIN,
-                                              );
-                                              setHowToPlayPanelPosition({
-                                                  x: defaultX,
-                                                  y: HOW_TO_PLAY_PANEL_DEFAULT_TOP,
-                                              });
-                                          }
-                                          setIsHowToPlayOpen(true);
-                                      }}
-                                  >
-                                      How to Play
-                                  </Button>
-                                  <Button onClick={() => void handleShowScores()}>Scores</Button>
-                                  <Button
-                                      type="primary"
-                                      className={`game-call-cabo-btn${isCaboCalledGlobal ? " game-cabo-called-btn" : ""}`}
-                                      disabled={!canCallCabo}
-                                      loading={isCallingCabo}
-                                      onClick={callCabo}
-                                  >
-                                      {isCaboCalledGlobal
-                                          ? (isCaboForcedByTimeoutGlobal
-                                              ? "Cabo Called (AFK/DC) - Final Round!"
-                                              : "Cabo Called - Final Round!")
-                                          : "Call Cabo"}
-                                  </Button>
-                              </div>
-                          </section>
-                          <section className="game-layout-zone game-layout-zone-bottom-left" aria-label="Chat">
-                              <div className="game-chat-zone-card">
-                                  <CaboChatPanel
-                                      sessionId={lobbySessionId}
-                                      token={token}
-                                      userId={userId}
-                                      cooldownSeconds={chatCooldownSeconds}
-                                      variant="game"
-                                      className="game-corner-chat-panel"
-                                  />
-                              </div>
-                          </section>
-                          <section className="game-layout-zone game-layout-zone-bottom-right" aria-label="Audio controls">
-                              <div className="game-audio-zone-card">
-                                  <InlineMusicPlayer variant="game" controlsDisabled={isIntroPhase || isRematchScreenPhase} />
-                              </div>
-                          </section>
-                      </div>
+                          )}
+                      </>
                   )}
 
                   {showResyncOverlay && (
@@ -4796,429 +5563,6 @@ const playerListRows = tablePlayerIds.map((id) => {
                       <div className="inline-music-controller-hidden" aria-hidden="true">
                           <InlineMusicPlayer controlsDisabled />
                       </div>
-                  )}
-                  {!isRematchScreenPhase && (
-                      <>
-                          {/* #32A banner or visual cue that stays on screen for everyone once Cabo is called (e.g., "Final Round!") */}
-                          {isCaboCalledGlobal && gameStatus !== "round_ended" && gameStatus !== "round_awaiting_rematch" &&  gameStatus !== "cabo_reveal" &&(
-                              <div style={{
-                                  position: "fixed",
-                                  bottom: "auto",
-                                  top: "25%",
-                                  left: "50%",
-                                  transform: "translateX(-50%)",
-                                  zIndex: 500,
-                                  backgroundColor: isCaboForcedByTimeoutGlobal
-                                    ? "rgba(150, 50, 50, 0.88)"
-                                    : "rgba(200, 80, 50, 0.88)",
-                                  color: "white",
-                                  padding: "10px 28px",
-                                  borderRadius: "12px",
-                                  fontWeight: "bold",
-                                  fontSize: "18px",
-                                  textAlign: "center",
-                                  boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
-                                  backdropFilter: "blur(6px)",
-                                  border: "2px solid rgba(255,255,255,0.25)",
-                                  pointerEvents: "none",
-                                  whiteSpace: "nowrap",
-                              }}>
-                                  {isCaboForcedByTimeoutGlobal
-                                    ? "Cabo called! Final Round!"
-                                    : "Cabo Called! Final Round!"}
-                              </div>
-                          )}
-
-
-                          {/* TOP CENTER */}
-                          {seatAssignments.topOpponentId != null && (
-                              <div className="top-cards opponent-seat-top">
-                                  <div className="game-opponent-seat-cards game-opponent-seat-cards-top">
-                                      {topSeatDisplayCards.map((card, displayIndex) => {
-                                          const slotIndex =
-                                              normalizeHandSlotIndex(card.position, HAND_SIZE) ??
-                                              (HAND_SIZE - 1 - displayIndex);
-                                          const highlightedForAbility =
-                                              canInteractWithAbilityTargets && (
-                                                  gameStatus === "ability_peek_opponent" ||
-                                                  (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
-                                              );
-                                          const readableSpyOrientation = shouldUseReadableSpyOrientation(card.faceDown);
-                                          return (
-                                              <div
-                                                  key={`top-${slotIndex}`}
-                                                  ref={(element) => {
-                                                      topSeatCardRefs.current[slotIndex] = element;
-                                                  }}
-                                                  className={`game-opponent-card-anchor${
-                                                      readableSpyOrientation ? " game-opponent-card-anchor-readable" : ""
-                                                  }`}
-                                              >
-                                                  <CardComponent
-                                                      hidden={isPostRoundPhase ? false : card.faceDown}
-                                                      value={card.value}
-                                                      size="small"
-                                                      // #28: highlight opponent cards during ability phase
-                                                      onClick={() => {
-                                                          if (canInteractWithAbilityTargets && seatAssignments.topOpponentId != null) {
-                                                              handleAbilityOpponentCardClick(seatAssignments.topOpponentId, slotIndex);
-                                                          }
-                                                      }}
-                                                      disabled={
-                                                          !highlightedForAbility
-                                                      }
-                                                      style={buildOpponentCardStyle(highlightedForAbility)}
-                                                  />
-                                              </div>
-                                          );
-                                      })}
-                                  </div>
-                                  <div
-                                      className={`game-opponent-seat-name${
-                                          currentTurnUserId === seatAssignments.topOpponentId ? " active" : ""
-                                      }`}
-                                      title={playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
-                                  >
-                                      {playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
-                                  </div>
-                              </div>
-                          )}
-
-                  {/* LEFT SIDE */}
-                  {seatAssignments.leftOpponentId != null && (
-                      <div className="left-cards opponent-seat-left">
-                          <div className="game-opponent-seat-cards game-opponent-seat-cards-left">
-                              {leftSeatCards.map((card, index) => {
-                                  const slotIndex = normalizeHandSlotIndex(card.position, HAND_SIZE) ?? index;
-                                  const highlightedForAbility =
-                                      canInteractWithAbilityTargets && (
-                                          gameStatus === "ability_peek_opponent" ||
-                                          (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
-                                      );
-                                  const readableSpyOrientation = shouldUseReadableSpyOrientation(card.faceDown);
-                                  return (
-                                      <div
-                                          key={`left-${slotIndex}`}
-                                          ref={(element) => {
-                                              leftSeatCardRefs.current[slotIndex] = element;
-                                          }}
-                                          className={`game-opponent-card-anchor${
-                                              readableSpyOrientation ? " game-opponent-card-anchor-readable" : ""
-                                          }`}
-                                      >
-                                          <CardComponent
-                                              hidden={isPostRoundPhase ? false : card.faceDown}
-                                              value={card.value}
-                                              size="small"
-                                              // #28: highlight opponent cards during ability phase
-                                              onClick={() => {
-                                                  if (canInteractWithAbilityTargets && seatAssignments.leftOpponentId != null) {
-                                                      handleAbilityOpponentCardClick(seatAssignments.leftOpponentId, slotIndex);
-                                                  }
-                                              }}
-                                              disabled={
-                                                  !highlightedForAbility
-                                              }
-                                              style={buildOpponentCardStyle(highlightedForAbility)}
-                                          />
-                                      </div>
-                                  );
-                              })}
-                          </div>
-                          <div
-                              className={`game-opponent-seat-name${
-                                  currentTurnUserId === seatAssignments.leftOpponentId ? " active" : ""
-                              }`}
-                              title={playerNamesById[seatAssignments.leftOpponentId] ?? `Player ${seatAssignments.leftOpponentId}`}
-                          >
-                              {playerNamesById[seatAssignments.leftOpponentId] ?? `Player ${seatAssignments.leftOpponentId}`}
-                          </div>
-                      </div>
-                  )}
-
-                  {/* RIGHT SIDE */}
-                  {seatAssignments.rightOpponentId != null && (
-                      <div className="right-cards opponent-seat-right">
-                          <div className="game-opponent-seat-cards game-opponent-seat-cards-right">
-                              {rightSeatCards.map((card, index) => {
-                                  const slotIndex = normalizeHandSlotIndex(card.position, HAND_SIZE) ?? index;
-                                  const highlightedForAbility =
-                                      canInteractWithAbilityTargets && (
-                                          gameStatus === "ability_peek_opponent" ||
-                                          (gameStatus === "ability_swap" && abilitySelectedOwnCardIndex !== null)
-                                      );
-                                  const readableSpyOrientation = shouldUseReadableSpyOrientation(card.faceDown);
-                                  return (
-                                      <div
-                                          key={`right-${slotIndex}`}
-                                          ref={(element) => {
-                                              rightSeatCardRefs.current[slotIndex] = element;
-                                          }}
-                                          className={`game-opponent-card-anchor${
-                                              readableSpyOrientation ? " game-opponent-card-anchor-readable" : ""
-                                          }`}
-                                      >
-                                          <CardComponent
-                                              hidden={isPostRoundPhase ? false : card.faceDown}
-                                              value={card.value}
-                                              size="small"
-                                              // #28: highlight opponent cards during ability phase
-                                              onClick={() => {
-                                                  if (canInteractWithAbilityTargets && seatAssignments.rightOpponentId != null) {
-                                                      handleAbilityOpponentCardClick(seatAssignments.rightOpponentId, slotIndex);
-                                                  }
-                                              }}
-                                              disabled={
-                                                  !highlightedForAbility
-                                              }
-                                              style={buildOpponentCardStyle(highlightedForAbility)}
-                                          />
-                                      </div>
-                                  );
-                              })}
-                          </div>
-                          <div
-                              className={`game-opponent-seat-name${
-                                  currentTurnUserId === seatAssignments.rightOpponentId ? " active" : ""
-                              }`}
-                              title={playerNamesById[seatAssignments.rightOpponentId] ?? `Player ${seatAssignments.rightOpponentId}`}
-                          >
-                              {playerNamesById[seatAssignments.rightOpponentId] ?? `Player ${seatAssignments.rightOpponentId}`}
-                          </div>
-                      </div>
-                  )}
-
-                  {/* CENTER */}
-                  <div className="center-area">
-                      <div className="pile">
-                          <div ref={drawPileCardRef} className="game-pile-card-anchor">
-                              <CardComponent
-                                  hidden={!showDrawPileAsRevealedCard}
-                                  value={showDrawPileAsRevealedCard ? drawnCard?.value : undefined}
-                                  abilityLabel={drawPileAbilityLabel}
-                                  size="medium"
-                                  onClick={drawFromPile}
-                                  draggable={isDrawPileSelectedForTurnAction && canDragSelectedTurnCard}
-                                  onDragStart={handleTurnCardDragStart}
-                                  onDragEnd={handleTurnCardDragEnd}
-                                  disabled={!drawPileCardInteractive}
-                                  style={isDrawPileSelectedForTurnAction ? selectedPileCardStyle : shouldHighlightPileChoice ? {
-                                      outline: "3px solid #34e27a",
-                                      outlineOffset: "2px",
-                                      boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
-                                  } : undefined}
-                              />
-                          </div>
-                          <p>Draw Pile</p>
-                      </div>
-
-                      <div className="pile">
-                          <div ref={discardPileCardRef} className="game-pile-card-anchor">
-                              <CardComponent
-                                  hidden={isDiscardPileTemporarilyHidden}
-                                  value={visibleDiscardPileCard?.value}
-                                  size="medium"
-                                  onClick={() => {
-                                      if (canDiscardDrawnCard) {
-                                          discardDrawnCard();
-                                          return;
-                                      }
-                                      if (canDrawFromDiscardPile) {
-                                          drawFromDiscardPile();
-                                      }
-                                  }}
-                                  draggable={canDrawFromDiscardPile || (isDiscardPileSelectedForTurnAction && canDragSelectedTurnCard)}
-                                  onDragStart={handleDiscardPileCardDragStart}
-                                  onDragEnd={handleTurnCardDragEnd}
-                                  onDragOver={handleDiscardPileDragOver}
-                                  onDragEnter={handleDiscardPileDragOver}
-                                  onDragLeave={handleDiscardPileDragLeave}
-                                  onDrop={handleDiscardPileDrop}
-                                  disabled={!discardPileCardInteractive}
-                                  style={isDiscardPileSelectedForTurnAction ? selectedPileCardStyle : isDragOverDiscardPile ? {
-                                      outline: "3px dashed #ffb14a",
-                                      outlineOffset: "2px",
-                                      boxShadow: "0 0 0 2px rgba(255, 177, 74, 0.45), 0 0 18px rgba(255, 177, 74, 0.78)",
-                                  } : shouldHighlightDiscardPileAsAction ? {
-                                      outline: "3px solid #34e27a",
-                                      outlineOffset: "2px",
-                                      boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
-                                  } : undefined}
-                              />
-                          </div>
-                          <p>Discard Pile</p>
-                      </div>
-                  </div>
-                  {showCenterTurnCountdown && (
-                      <div className="game-center-turn-timer">
-                          <div className="game-turn-progress-track">
-                                  <div
-                                      className="game-turn-progress-fill"
-                                      style={{
-                                          width: `${turnProgressPercent}%`,
-                                      }}
-                                  />
-                              </div>
-                          <p className="game-turn-progress-label">{centerTurnActionLabel}</p>
-                          {canShowAbilityChoiceButtons && (
-                              <div className="game-turn-action-buttons">
-                                  <Button
-                                      type="default"
-                                      className={`game-turn-action-btn game-turn-action-btn-use${
-                                          isUseAbilitySelected ? " game-turn-action-btn-use-selected" : ""
-                                      }`}
-                                      disabled={isSkippingAbilityChoice || isSubmittingAbility}
-                                      onClick={chooseUseAbility}
-                                  >
-                                      {abilityPhaseLabel === "Ability" ? "Use Ability" : abilityPhaseLabel}
-                                  </Button>
-                                  <Button
-                                      type="default"
-                                      className="game-turn-action-btn game-turn-action-btn-skip"
-                                      disabled={isSkippingAbilityChoice || isSubmittingAbility || isUseAbilitySelected}
-                                      loading={isSkippingAbilityChoice}
-                                      onClick={skipAbilityChoice}
-                                  >
-                                      End Turn
-                                  </Button>
-                              </div>
-                          )}
-                      </div>
-                  )}
-
-                  {/* Bottom cards are only itneractable when its users turn*/}
-                  <div className={`bottom-cards${isMyTurnUi ? " game-current-player-highlight" : ""}`}>
-                      {[...Array(HAND_SIZE)].map((_, i) => {
-                          const card = myHand[i];
-                          const isSelectedForSwap = abilitySelectedOwnCardIndex === i;
-                          const isSwapChoosingOwnCard =
-                              gameStatus === "ability_swap" && abilitySelectedOwnCardIndex == null;
-                          // #28: highlight own cards during ability phase
-                          const canClickOwnCardForAbility =
-                              canInteractWithAbilityTargets && (
-                                  gameStatus === "ability_peek_self" ||
-                                  isSwapChoosingOwnCard
-                              );
-                          const isHighlightedForAbility =
-                              canClickOwnCardForAbility ||
-                              (canInteractWithAbilityTargets && gameStatus === "ability_swap" && isSelectedForSwap);
-                          const isPeekCardSelected = isPeekPhase && peekVisibleCards[i];
-                          const isPeekCardSelectable =
-                            isPeekPhase &&
-                            !isSubmittingInitialPeek &&
-                            !isPeekCardSelected &&
-                            revealedPeekCount < 2;
-                          const isSwapDropTarget =
-                              (isDraggingTurnCard || isDraggingDiscardPileSwapCard) &&
-                              (canSwapDrawnCardWithHand || canDrawFromDiscardPile) &&
-                              dragOverOwnCardIndex === i;
-
-                          const cardStyle: React.CSSProperties | undefined = isPeekPhase
-                              ? (isPeekCardSelected ? {
-                                  outline: "3px solid #e8a87c",
-                                  outlineOffset: "2px",
-                                  boxShadow: "0 0 0 2px rgba(232, 168, 124, 0.35)",
-                              } : isPeekCardSelectable ? {
-                                  outline: "3px dashed rgba(52, 226, 122, 0.95)",
-                                  outlineOffset: "2px",
-                                  boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
-                              } : {
-                                  outline: "2px solid rgba(255, 255, 255, 0.75)",
-                                  outlineOffset: "2px",
-                              })
-                              : isHighlightedForAbility ? {
-                              outline: (gameStatus === "ability_swap" && isSelectedForSwap)
-                                  ? "3px solid #e8a87c"   // orange = selected for swap
-                                  : "3px solid #a8b87a",  // green = clickable
-                              outlineOffset: "2px",
-                          } : shouldHighlightOwnCardsForTurnSwap ? {
-                              outline: "3px solid #34e27a",
-                              outlineOffset: "2px",
-                              boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.25)",
-                          } : undefined;
-                          const finalCardStyle: React.CSSProperties | undefined = isSwapDropTarget ? {
-                              ...(cardStyle ?? {}),
-                              outline: "3px dashed #ffb14a",
-                              outlineOffset: "2px",
-                              boxShadow: "0 0 0 2px rgba(255, 177, 74, 0.48), 0 0 14px rgba(255, 177, 74, 0.72)",
-                          } : cardStyle;
-
-                          return (
-                              <div
-                                  key={i}
-                                  ref={(element) => {
-                                      ownHandCardRefs.current[i] = element;
-                                  }}
-                                  className="game-own-card-anchor"
-                              >
-                                  <CardComponent
-                                    hidden={isPostRoundPhase ? false : !peekVisibleCards[i]}  // #16 selected cards are face-up locally
-                                    value={card?.value}
-                                    size="large"
-                                    onClick={() => {
-                                        if (isPeekPhase) {
-                                            handlePeekCardClick(i);
-                                            return;
-                                        }
-
-                                        if (canClickOwnCardForAbility) {
-                                            handleAbilityOwnCardClick(i);
-                                            return;
-                                        }
-
-                                        if (canSwapDrawnCardWithHand) {
-                                            swapDrawnCardWithHand(i);
-                                            return;
-                                        }
-                                    }}
-                                    disabled={isPeekPhase
-                                        ? (isSubmittingInitialPeek || isPeekCardSelected || (!isPeekCardSelected && revealedPeekCount >= 2))
-                                        : !(canClickOwnCardForAbility || isHighlightedForAbility || canSwapDrawnCardWithHand)}
-                                    onDragOver={(event) => handleOwnCardDragOver(event, i)}
-                                    onDragEnter={(event) => handleOwnCardDragOver(event, i)}
-                                    onDragLeave={() => handleOwnCardDragLeave(i)}
-                                    onDrop={(event) => handleOwnCardDrop(event, i)}
-                                    style={finalCardStyle}
-                                  />
-                              </div>
-                          );
-                      })}
-                  </div>
-
-                          {flyingCardAnimations.length > 0 && (
-                              <div className="game-flying-card-layer" aria-hidden="true">
-                                  {flyingCardAnimations.map((animation) => (
-                                      <div
-                                          key={animation.id}
-                                          className={`game-flying-card${
-                                              animation.fadeMode === "late"
-                                                  ? " game-flying-card-late-fade"
-                                                  : ""
-                                          }`}
-                                          style={{
-                                              left: `${animation.startX}px`,
-                                              top: `${animation.startY}px`,
-                                              width: `${animation.width}px`,
-                                              height: `${animation.height}px`,
-                                              ["--fly-delta-x" as string]: `${animation.deltaX}px`,
-                                              ["--fly-delta-y" as string]: `${animation.deltaY}px`,
-                                          } as React.CSSProperties}
-                                      >
-                                          <CardComponent
-                                              hidden={animation.hidden}
-                                              value={animation.value}
-                                              size="medium"
-                                              style={{
-                                                  width: "100%",
-                                                  height: "100%",
-                                                  pointerEvents: "none",
-                                              }}
-                                          />
-                                      </div>
-                                  ))}
-                              </div>
-                          )}
-                      </>
                   )}
 
               </div>

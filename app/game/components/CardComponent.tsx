@@ -15,6 +15,7 @@ interface CardProps {
   onDrop?: React.DragEventHandler<HTMLDivElement>;
   onDragEnter?: React.DragEventHandler<HTMLDivElement>;
   onDragLeave?: React.DragEventHandler<HTMLDivElement>;
+  flipDurationMs?: number;
 }
 
 // get the correct path for card face images
@@ -22,7 +23,7 @@ const getCardImagePath = (value: number): string => {
   return `/card${value}.jpg`;
 };
 
-const FLIP_ANIMATION_MS = 280;
+const DEFAULT_FLIP_ANIMATION_MS = 280;
 
 const CardComponent: React.FC<CardProps> = ({
   hidden,
@@ -39,10 +40,16 @@ const CardComponent: React.FC<CardProps> = ({
   onDrop,
   onDragEnter,
   onDragLeave,
+  flipDurationMs = DEFAULT_FLIP_ANIMATION_MS,
 }) => {
   const [flipClass, setFlipClass] = useState<string>("");
   const previousHiddenRef = useRef<boolean>(hidden);
   const flipResetTimeoutRef = useRef<number | null>(null);
+
+  const effectiveFlipAnimationMs =
+    Number.isFinite(Number(flipDurationMs)) && Number(flipDurationMs) > 0
+      ? Math.max(1, Math.round(Number(flipDurationMs)))
+      : DEFAULT_FLIP_ANIMATION_MS;
 
   useEffect(() => {
     const previousHidden = previousHiddenRef.current;
@@ -54,10 +61,10 @@ const CardComponent: React.FC<CardProps> = ({
       flipResetTimeoutRef.current = window.setTimeout(() => {
         setFlipClass("");
         flipResetTimeoutRef.current = null;
-      }, FLIP_ANIMATION_MS);
+      }, effectiveFlipAnimationMs);
     }
     previousHiddenRef.current = hidden;
-  }, [hidden]);
+  }, [effectiveFlipAnimationMs, hidden]);
 
   useEffect(() => {
     return () => {
@@ -88,9 +95,9 @@ const CardComponent: React.FC<CardProps> = ({
       : "";
   const mergedAnimation =
     flipAnimationName && baseAnimation
-      ? `${baseAnimation}, ${flipAnimationName} ${FLIP_ANIMATION_MS}ms ease-out`
+      ? `${baseAnimation}, ${flipAnimationName} ${effectiveFlipAnimationMs}ms ease-out`
       : flipAnimationName
-        ? `${flipAnimationName} ${FLIP_ANIMATION_MS}ms ease-out`
+        ? `${flipAnimationName} ${effectiveFlipAnimationMs}ms ease-out`
         : baseAnimation || undefined;
 
 

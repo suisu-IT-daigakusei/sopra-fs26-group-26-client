@@ -4,6 +4,7 @@ import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
+import { showTimedConfirmation } from "@/utils/timedConfirmation";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { Button, Space } from "antd";
@@ -125,9 +126,10 @@ export default function CaboInviteNotifications() {
       if (status !== "LOBBY") {
         return true;
       }
-      return window.confirm(
-        "You are already in a lobby. Accepting this invite will leave your current lobby. Continue?",
-      );
+      return showTimedConfirmation({
+        title: "You are already in a lobby. Accepting this invite will leave your current lobby. Continue?",
+        timeoutSeconds: 10,
+      });
     } catch {
       return true;
     }

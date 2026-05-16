@@ -10,6 +10,7 @@ import useLocalStorage from "@/hooks/useLocalStorage";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
+import { showTimedConfirmation } from "@/utils/timedConfirmation";
 
 type LobbyGetDTO = {
     sessionId?: string | null;
@@ -251,9 +252,10 @@ const LobbyJoin = () => {
                 // User is likely not host; keep generic confirmation.
             }
 
-            return window.confirm(
-                "You are already in a lobby. Joining another lobby will leave your current lobby. Continue?",
-            );
+            return showTimedConfirmation({
+                title: "You are already in a lobby. Joining another lobby will leave your current lobby. Continue?",
+                timeoutSeconds: 10,
+            });
         } catch {
             // If we cannot determine status, do not block join flow.
             return true;

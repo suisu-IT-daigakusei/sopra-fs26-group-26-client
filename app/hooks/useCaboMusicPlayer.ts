@@ -39,7 +39,6 @@ export type CaboSoundEffectKind =
   | "cabo_call"
   | "players_ready"
   | "applause"
-  | "game_start"
   | "afk_warning";
 type LoopedCaboSoundEffectKind = "afk_warning";
 const CABO_MUSIC_SETTINGS_SYNC_EVENT = "cabo:music-settings-sync";
@@ -121,11 +120,6 @@ const CABO_SOUND_EFFECT_CONFIG: Record<CaboSoundEffectKind, {
   applause: {
     source: "/applause.mp3",
     gain: 0.6,
-    minIntervalMs: 2500,
-  },
-  game_start: {
-    source: "/game_start.mp3",
-    gain: 0.58,
     minIntervalMs: 2500,
   },
   afk_warning: {

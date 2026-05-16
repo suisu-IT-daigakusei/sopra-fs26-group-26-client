@@ -10,7 +10,7 @@ import { User } from "@/types/user";
 import { toPresenceKey, toPresenceLabel } from "@/utils/presence";
 import { resolveCharacterColorId } from "@/utils/userSettings";
 import CharacterAvatar from "@/components/CharacterAvatar";
-import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
+import { deriveUserOutcomeStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { formatLocalDate, formatLocalDateTime, localDateSearchToken, toEpochMs } from "@/utils/dateTime";
 import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
@@ -109,6 +109,13 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatMaxOneFractionDigit(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  return Number(value.toFixed(1)).toString();
+}
+
 function toKeyCandidates(value: unknown): string[] {
   const raw = String(value ?? "").trim();
   if (!raw) {
@@ -123,6 +130,15 @@ function toKeyCandidates(value: unknown): string[] {
   }
 
   return Array.from(candidates);
+}
+
+function idsReferToSameUser(left: unknown, right: unknown): boolean {
+  const leftCandidates = toKeyCandidates(left);
+  const rightCandidates = new Set(toKeyCandidates(right));
+  if (leftCandidates.length === 0 || rightCandidates.size === 0) {
+    return false;
+  }
+  return leftCandidates.some((candidate) => rightCandidates.has(candidate));
 }
 
 function pickMappedNumber(record: Record<string, unknown> | null, key: string): number | null {
@@ -168,7 +184,7 @@ function deriveWinnerFromScoreMap(
 
   const winnerId = winners[0].id;
   const winnerName =
-    winnerId === viewedUserId && viewedUsername.trim().length > 0
+    idsReferToSameUser(winnerId, viewedUserId) && viewedUsername.trim().length > 0
       ? viewedUsername
       : `User ${winnerId}`;
 
@@ -180,18 +196,14 @@ function toReadableScore(value: number | null): string {
     return "-";
   }
 
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-
-  return String(Number(value.toFixed(2)).toString());
+  return formatMaxOneFractionDigit(value);
 }
 
 function toReadableRounds(value: number | null): string {
   if (value == null) {
     return "-";
   }
-  return String(Math.max(0, Math.floor(value)));
+  return formatMaxOneFractionDigit(value);
 }
 
 function toPlayedAtDisplay(value: unknown): { text: string; sortValue: number } {
@@ -295,7 +307,7 @@ function toProfileResultRows(
     const winnerById = Boolean(
       loggedInUserId.length > 0 &&
       winnerId.length > 0 &&
-      winnerId === loggedInUserId,
+      idsReferToSameUser(winnerId, loggedInUserId),
     );
     const winnerByName = Boolean(
       winnerId.length === 0 &&
@@ -604,6 +616,9 @@ const UserProfilePage: React.FC = () => {
       if (row.isEmptyState || !row.winnerUserId) {
         return;
       }
+      if (preferredViewedName.length > 0 && idsReferToSameUser(row.winnerUserId, viewedUserId)) {
+        return;
+      }
       const candidateName = String(row.winnerName ?? "").trim();
       if (isPlaceholderWinnerName(candidateName)) {
         return;
@@ -704,51 +719,50 @@ const UserProfilePage: React.FC = () => {
 
   const creationDateRaw = String(user?.creationDate ?? "").trim();
   const creationDate = creationDateRaw ? formatLocalDate(creationDateRaw, creationDateRaw) : "-";
-  const rank = user?.overallRank ?? "-";
-  const derivedPlayedStats = useMemo(
-    () => derivePlayedStatsFromHistoryPayload(resultsRaw, viewedUserId),
+  const rankNumber = toFiniteNumber(user?.overallRank);
+  const rank = rankNumber == null
+    ? (user?.overallRank ?? "-")
+    : formatMaxOneFractionDigit(rankNumber);
+  const derivedOutcomeStats = useMemo(
+    () => deriveUserOutcomeStatsFromHistoryPayload(resultsRaw, viewedUserId),
     [resultsRaw, viewedUserId],
   );
-  const roundsPlayedRaw = (
-    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
-  )?.roundsPlayed ?? (
-    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
-  )?.rounds ?? (
-    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
-  )?.roundCount ?? derivedPlayedStats.roundsPlayed;
+  const roundsPlayedRaw = derivedOutcomeStats.roundsPlayed;
   const roundsPlayed = Number.isFinite(Number(roundsPlayedRaw))
     ? Number(roundsPlayedRaw)
     : null;
-  const roundsPlayedText = roundsPlayed == null ? "-" : String(roundsPlayed);
-  const roundsWon = Number(user?.roundsWon ?? 0);
+  const roundsPlayedText = roundsPlayed == null ? "-" : formatMaxOneFractionDigit(roundsPlayed);
+  const roundsWonRaw = derivedOutcomeStats.roundsWon;
+  const roundsWon = Number.isFinite(Number(roundsWonRaw))
+    ? Number(roundsWonRaw)
+    : null;
   const roundsWonRatePct =
-    roundsPlayed != null && roundsPlayed > 0 ? (roundsWon / roundsPlayed) * 100 : null;
+    roundsPlayed != null && roundsPlayed > 0 && roundsWon != null ? (roundsWon / roundsPlayed) * 100 : null;
   const roundsWonRateText = roundsWonRatePct == null
     ? "-"
-    : `${roundsWon}/${roundsPlayed} (${Number(roundsWonRatePct).toFixed(1).replace(/\.0$/, "")}%)`;
-  const gamesWon = Number(user?.gamesWon ?? 0);
-  const gamesPlayedRaw = (
-    user as User & { gamesPlayed?: number | null; games?: number | null }
-  )?.gamesPlayed ?? (
-    user as User & { gamesPlayed?: number | null; games?: number | null }
-  )?.games ?? derivedPlayedStats.gamesPlayed;
+    : `${formatMaxOneFractionDigit(roundsWon as number)}/${formatMaxOneFractionDigit(roundsPlayed as number)} (${Number(roundsWonRatePct).toFixed(1).replace(/\.0$/, "")}%)`;
+  const gamesWonRaw = derivedOutcomeStats.gamesWon;
+  const gamesWon = Number.isFinite(Number(gamesWonRaw))
+    ? Number(gamesWonRaw)
+    : null;
+  const gamesPlayedRaw = derivedOutcomeStats.gamesPlayed;
   const gamesPlayed = Number.isFinite(Number(gamesPlayedRaw))
     ? Number(gamesPlayedRaw)
     : null;
   const gamesWonRatePct =
-    gamesPlayed != null && gamesPlayed > 0 ? (gamesWon / gamesPlayed) * 100 : null;
+    gamesPlayed != null && gamesPlayed > 0 && gamesWon != null ? (gamesWon / gamesPlayed) * 100 : null;
   const gamesWonRateText = gamesWonRatePct == null
     ? "-"
-    : `${gamesWon}/${gamesPlayed} (${Number(gamesWonRatePct).toFixed(1).replace(/\.0$/, "")}%)`;
+    : `${formatMaxOneFractionDigit(gamesWon as number)}/${formatMaxOneFractionDigit(gamesPlayed as number)} (${Number(gamesWonRatePct).toFixed(1).replace(/\.0$/, "")}%)`;
   const losses =
-    gamesPlayed != null
+    gamesPlayed != null && gamesWon != null
       ? Math.max(0, gamesPlayed - gamesWon)
       : null;
-  const averageScoreRaw = user?.averageScorePerRound;
+  const averageScoreRaw = derivedOutcomeStats.averageScorePerRound;
   const averageScore =
     averageScoreRaw == null || !Number.isFinite(Number(averageScoreRaw))
       ? "-"
-      : Number(averageScoreRaw).toFixed(2).replace(/\.00$/, "");
+      : formatMaxOneFractionDigit(Number(averageScoreRaw));
   const shownBio = (user?.bio ?? "").trim() || DEFAULT_BIO;
   const isDefaultBio = shownBio === DEFAULT_BIO;
   const profilePresenceKey = toPresenceKey(user?.status);

@@ -620,6 +620,14 @@ const HistoryPage: React.FC = () => {
   const [sessionLogEntries, setSessionLogEntries] = useState<SessionMoveLogEntry[] | null>(null);
   const [isSharingSession, setIsSharingSession] = useState(false);
 
+  const handleBack = useCallback(() => {
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push("/dashboard");
+  }, [router]);
+
   useEffect(() => {
     if (!sessionId) {
       setSessionSnapshot(null);
@@ -1135,8 +1143,8 @@ const HistoryPage: React.FC = () => {
 
           <Card className="dashboard-container">
             <div className="dashboard-button-stack">
-              <Button type="default" onClick={() => router.push("/dashboard")}>
-                Back to Dashboard
+              <Button type="default" onClick={handleBack}>
+                {"\u2190"} Back
               </Button>
             </div>
           </Card>

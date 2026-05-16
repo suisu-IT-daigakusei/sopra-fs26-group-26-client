@@ -3,6 +3,10 @@
 import React from "react";
 import { Button } from "antd";
 import CaboChatPanel from "@/components/CaboChatPanel";
+import {
+    DEFAULT_CONFIRM_TIMEOUT_SECONDS,
+    resolveConfirmationTimeoutSeconds,
+} from "@/utils/timedConfirmation";
 
 type FinalPlayer = {
     userId: number;
@@ -125,12 +129,14 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     onChooseRematch,
 }) => {
     if (!isOpen) return null;
-    // Create a modal/toast notification with a 5s countdown timer and "Confirm/Cancel" buttons.
+    // Inline decision confirmation with countdown auto-cancel.
     //   #58
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const [pendingDecision, setPendingDecision] = React.useState<RematchDecision | null>(null);
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    const [confirmCountdown, setConfirmCountdown] = React.useState<number>(5);
+    const [confirmCountdown, setConfirmCountdown] = React.useState<number>(
+        DEFAULT_CONFIRM_TIMEOUT_SECONDS,
+    );
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const confirmTimerRef = React.useRef<number | null>(null);
 
@@ -149,12 +155,16 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
             confirmTimerRef.current = null;
         }
         setPendingDecision(null);
-        setConfirmCountdown(5);
+        setConfirmCountdown(DEFAULT_CONFIRM_TIMEOUT_SECONDS);
     };
 
     const startConfirm = (decision: RematchDecision) => {
+        const resolvedConfirmWindowSeconds = resolveConfirmationTimeoutSeconds(
+            DEFAULT_CONFIRM_TIMEOUT_SECONDS,
+            rematchCountdownSeconds,
+        );
         setPendingDecision(decision);
-        setConfirmCountdown(5);
+        setConfirmCountdown(resolvedConfirmWindowSeconds);
         if (confirmTimerRef.current != null) {
             window.clearInterval(confirmTimerRef.current);
         }
@@ -167,12 +177,34 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         confirmTimerRef.current = null;
                     }
                     setPendingDecision(null);
-                    return 5;
+                    return DEFAULT_CONFIRM_TIMEOUT_SECONDS;
                 }
                 return previous - 1;
             });
         }, 1000);
     };
+
+    // Keep pending confirmation bounded by live backend-derived rematch timer.
+    // If the global rematch timer is <= 10s, use that remaining time.
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    React.useEffect(() => {
+        if (pendingDecision == null) {
+            return;
+        }
+        const maxAllowedSeconds = resolveConfirmationTimeoutSeconds(
+            DEFAULT_CONFIRM_TIMEOUT_SECONDS,
+            rematchCountdownSeconds,
+        );
+        setConfirmCountdown((previous) => Math.min(previous, maxAllowedSeconds));
+        if (rematchCountdownSeconds <= 0) {
+            if (confirmTimerRef.current != null) {
+                window.clearInterval(confirmTimerRef.current);
+                confirmTimerRef.current = null;
+            }
+            setPendingDecision(null);
+            setConfirmCountdown(DEFAULT_CONFIRM_TIMEOUT_SECONDS);
+        }
+    }, [pendingDecision, rematchCountdownSeconds]);
 
     const normalizedPlayers: FinalPlayerResolved[] = players.map((player) => ({
         ...player,
@@ -409,10 +441,10 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         Continue keeps the same lobby code. Fresh creates a new lobby code.
                     </p>
 
-                    {/* 5s countdown modal after button click */}
+                    {/* 10s countdown confirmation after button click (or remaining rematch time if <=10s) */}
                     {pendingDecision !== null && (
-                        <div className="final-score-confirm-modal">
-                            <p className="final-score-confirm-text">
+                        <div className="final-score-confirm-modal cabo-inline-confirm">
+                            <p className="final-score-confirm-text cabo-inline-confirm-text">
                                 Confirm:{" "}
                                 <strong>
                                     {pendingDecision === "CONTINUE"
@@ -422,9 +454,9 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                                             : "No Rematch"}
                                 </strong>
                                 {" "}in{" "}
-                                <span className="final-score-confirm-countdown">{confirmCountdown}s</span>
+                                <span className="final-score-confirm-countdown cabo-inline-confirm-countdown">{confirmCountdown}s</span>
                             </p>
-                            <div className="final-score-confirm-actions">
+                            <div className="final-score-confirm-actions cabo-inline-confirm-actions">
                                 <Button
                                     type="primary"
                                     loading={isSubmittingRematchDecision}

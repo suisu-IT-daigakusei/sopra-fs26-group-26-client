@@ -11,7 +11,7 @@ import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
-import { derivePlayedStatsFromHistoryPayload } from "@/utils/userHistoryStats";
+import { deriveUserOutcomeStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { resolveCharacterColorId } from "@/utils/userSettings";
 import { Button, Card } from "antd";
 
@@ -63,6 +63,13 @@ function getGreetingSlotByHour(localHour: number): GreetingSlot {
 function pickRandomGreeting(slot: GreetingSlot): string {
   const options = GREETINGS_BY_TIME_SLOT[slot];
   return options[Math.floor(Math.random() * options.length)] ?? "Welcome back to Online-CABO!";
+}
+
+function formatMaxOneFractionDigit(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  return Number(value.toFixed(1)).toString();
 }
 
 function DashboardContent() {
@@ -251,25 +258,33 @@ function DashboardContent() {
     window.location.assign("/login");
   };
 
-  const derivedPlayedStats = useMemo(
-    () => derivePlayedStatsFromHistoryPayload(userHistoryPayload, normalizedUserId),
+  const derivedOutcomeStats = useMemo(
+    () => deriveUserOutcomeStatsFromHistoryPayload(userHistoryPayload, normalizedUserId),
     [normalizedUserId, userHistoryPayload],
   );
-  const roundsWon = Number(user?.roundsWon ?? 0);
-  const roundsPlayedRaw = (
-    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
-  )?.roundsPlayed ?? (
-    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
-  )?.rounds ?? (
-    user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
-  )?.roundCount ?? derivedPlayedStats.roundsPlayed ?? 0;
+  const roundsWonRaw = derivedOutcomeStats.roundsWon ?? user?.roundsWon ?? 0;
+  const roundsWon = Number.isFinite(Number(roundsWonRaw))
+    ? Number(roundsWonRaw)
+    : 0;
+  const roundsPlayedRaw =
+    derivedOutcomeStats.roundsPlayed ?? (
+      user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+    )?.roundsPlayed ?? (
+      user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+    )?.rounds ?? (
+      user as User & { roundsPlayed?: number | null; rounds?: number | null; roundCount?: number | null }
+    )?.roundCount ?? 0;
   const roundsPlayed = Number.isFinite(Number(roundsPlayedRaw))
     ? Number(roundsPlayedRaw)
     : 0;
   const winRatePct = roundsPlayed > 0 ? (roundsWon / roundsPlayed) * 100 : 0;
   const winRateText = Number(winRatePct).toFixed(1).replace(/\.0$/, "");
-  const winsRoundsSummary = `${roundsWon}/${roundsPlayed} (${winRateText}%)`;
-  const averageScore = user?.averageScorePerRound ?? "-";
+  const winsRoundsSummary = `${formatMaxOneFractionDigit(roundsWon)}/${formatMaxOneFractionDigit(roundsPlayed)} (${winRateText}%)`;
+  const averageScoreRaw = derivedOutcomeStats.averageScorePerRound ?? user?.averageScorePerRound;
+  const averageScore =
+    averageScoreRaw == null || !Number.isFinite(Number(averageScoreRaw))
+      ? "-"
+      : formatMaxOneFractionDigit(Number(averageScoreRaw));
   const friendOnlineLabel = friendOnlineSummary.friendsOnline === 1
     ? "Friend Online"
     : "Friends Online";

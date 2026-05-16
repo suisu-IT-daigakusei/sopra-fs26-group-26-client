@@ -10,6 +10,7 @@ import {
 } from "@/utils/chat";
 import { getStompBrokerUrl } from "@/utils/domain";
 import { Client } from "@stomp/stompjs";
+import { SendOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
 import SockJS from "sockjs-client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -405,15 +406,16 @@ export default function CaboChatPanel({
       const username = String(message.username ?? "Player").trim() || "Player";
       const text = normalizeChatInputForDisplay(String(message.text ?? ""));
       const ownMessage = normalizedUserId.length > 0 && String(message.userId ?? "") === normalizedUserId;
+      const metaLabel = `${formatMessageClock(message.sentAt)}, ${username}`;
       return (
         <div
           key={`chat-message-${String(message.sequence ?? "x")}-${index}`}
           className={`cabo-chat-message${ownMessage ? " cabo-chat-message-own" : ""}`}
         >
-          <div className="cabo-chat-message-meta">
-            {formatMessageClock(message.sentAt)}, {username}
-          </div>
-          <div className="cabo-chat-message-text">{text}</div>
+          <p className="cabo-chat-message-line">
+            <span className="cabo-chat-message-meta">{metaLabel}</span>
+            <span className="cabo-chat-message-text">{text}</span>
+          </p>
         </div>
       );
     })
@@ -428,81 +430,85 @@ export default function CaboChatPanel({
       </div>
 
       <div className="cabo-chat-controls">
-        <div className="cabo-chat-action-row">
-          <Button
-            type="text"
-            size="small"
-            className="cabo-chat-icon-btn cabo-chat-resync-icon-btn"
-            disabled={!isReady || isResyncing}
-            onClick={() => void fetchHistory(true)}
-            title="Resync chat"
-            aria-label="Resync chat"
-          >
-            <span className={isResyncing ? "cabo-chat-spinning" : ""}>{"\uD83D\uDDD8"}</span>
-          </Button>
-          <Input
-            value={draft}
-            maxLength={messageMaxLength}
-            className="cabo-chat-input"
-            placeholder="Type a message..."
-            suffix={<span className="cabo-chat-counter">{draft.length}/{messageMaxLength}</span>}
-            onChange={(event) => handleDraftChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void handleSend();
-              }
-            }}
-          />
-          <Button
-            type="text"
-            size="small"
-            className="cabo-chat-emote-toggle-btn"
-            onClick={() => setShowEmotes((previous) => !previous)}
-            title="Emotes"
-            aria-label="Toggle emotes"
-          >
-            {"\uD83D\uDE42"}
-          </Button>
-          <Button
-            type="text"
-            size="small"
-            className="cabo-chat-send-btn"
-            disabled={!canSend}
-            loading={isSending}
-            onClick={() => void handleSend()}
-            title={isCooldownActive ? `Send (${cooldownRemainingSeconds}s)` : "Send message"}
-            aria-label={isCooldownActive ? `Send on cooldown ${cooldownRemainingSeconds} seconds` : "Send message"}
-          >
-            <span className="cabo-chat-send-btn-inner">
-              <span className="cabo-chat-send-symbol">{"\u27A4"}</span>
-              {isCooldownActive && (
-                <span className="cabo-chat-send-cooldown-text">{cooldownRemainingSeconds}</span>
-              )}
-              {isCooldownActive && (
-                <svg
-                  className="cabo-chat-send-cooldown-ring"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <circle
-                    className="cabo-chat-send-cooldown-ring-track"
-                    cx="12"
-                    cy="12"
-                    r={ringRadius}
-                  />
-                  <circle
-                    className="cabo-chat-send-cooldown-ring-progress"
-                    cx="12"
-                    cy="12"
-                    r={ringRadius}
-                    strokeDasharray={ringCircumference}
-                    strokeDashoffset={ringDashOffset}
-                  />
-                </svg>
-              )}
-            </span>
-          </Button>
+        <div className="cabo-chat-compose-row">
+          <div className="cabo-chat-input-row">
+            <Input
+              value={draft}
+              maxLength={messageMaxLength}
+              className="cabo-chat-input"
+              placeholder="Type a message..."
+              suffix={<span className="cabo-chat-counter">{draft.length}/{messageMaxLength}</span>}
+              onChange={(event) => handleDraftChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleSend();
+                }
+              }}
+            />
+          </div>
+          <div className="cabo-chat-action-row">
+            <Button
+              type="text"
+              size="small"
+              className="cabo-chat-icon-btn cabo-chat-resync-icon-btn"
+              disabled={!isReady || isResyncing}
+              onClick={() => void fetchHistory(true)}
+              title="Resync chat"
+              aria-label="Resync chat"
+            >
+              <span className={isResyncing ? "cabo-chat-spinning" : ""}>{"\uD83D\uDDD8"}</span>
+            </Button>
+            <Button
+              type="text"
+              size="small"
+              className="cabo-chat-icon-btn cabo-chat-emote-toggle-btn"
+              onClick={() => setShowEmotes((previous) => !previous)}
+              title="Emotes"
+              aria-label="Toggle emotes"
+            >
+              {"\uD83D\uDE42"}
+            </Button>
+            <Button
+              type="text"
+              size="small"
+              className="cabo-chat-send-btn"
+              disabled={!canSend}
+              loading={isSending}
+              onClick={() => void handleSend()}
+              title={isCooldownActive ? `Send (${cooldownRemainingSeconds}s)` : "Send message"}
+              aria-label={isCooldownActive ? `Send on cooldown ${cooldownRemainingSeconds} seconds` : "Send message"}
+            >
+              <span className="cabo-chat-send-btn-inner">
+                <SendOutlined className="cabo-chat-send-symbol" />
+                {isCooldownActive && (
+                  <span className="cabo-chat-send-cooldown-text">{cooldownRemainingSeconds}</span>
+                )}
+                {isCooldownActive && (
+                  <svg
+                    className="cabo-chat-send-cooldown-ring"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      className="cabo-chat-send-cooldown-ring-track"
+                      cx="12"
+                      cy="12"
+                      r={ringRadius}
+                    />
+                    <circle
+                      className="cabo-chat-send-cooldown-ring-progress"
+                      cx="12"
+                      cy="12"
+                      r={ringRadius}
+                      strokeDasharray={ringCircumference}
+                      strokeDashoffset={ringDashOffset}
+                    />
+                  </svg>
+                )}
+              </span>
+            </Button>
+          </div>
         </div>
         {showEmotes && (
           <div className="cabo-chat-emote-row">

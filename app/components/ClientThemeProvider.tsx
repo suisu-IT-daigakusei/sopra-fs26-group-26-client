@@ -138,8 +138,10 @@ export default function ClientThemeProvider({ children }: ClientThemeProviderPro
     document.documentElement.style.setProperty("--cabo-text-color", textColorHex);
     document.documentElement.classList.toggle("cabo-text-dark", useLightAppearance);
     document.documentElement.style.setProperty("--cabo-appearance-mode", useLightAppearance ? "light" : "dark");
+    document.documentElement.setAttribute("data-cabo-appearance", useLightAppearance ? "light" : "dark");
     return () => {
       document.documentElement.classList.remove("cabo-text-dark");
+      document.documentElement.removeAttribute("data-cabo-appearance");
     };
   }, [primaryColorHex, primaryHoverColorHex, textColorHex, useLightAppearance]);
 

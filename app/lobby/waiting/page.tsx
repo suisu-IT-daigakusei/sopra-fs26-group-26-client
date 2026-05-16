@@ -18,12 +18,13 @@ import type { ApplicationError } from "@/types/error";
 import type { User } from "@/types/user";
 import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
+import { showTimedConfirmation } from "@/utils/timedConfirmation";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { getCharacterWavingFrameMax } from "@/utils/userSettings";
 import { Client } from "@stomp/stompjs";
-import { Button, Card, Checkbox, Collapse, Input, List, Popconfirm, Slider, Spin, Switch, Typography } from "antd";
+import { Button, Card, Checkbox, Collapse, Input, List, Slider, Spin, Switch, Typography } from "antd";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -142,6 +143,7 @@ const TIMER_LIMITS = {
   absentRoundPoints: { min: 0, max: 100 },
   chatCooldownSeconds: { min: 1, max: 60 },
 } as const;
+const LOBBY_SETTINGS_SLIDER_TOOLTIP = { open: false } as const;
 
 function clampTimerValue(
   key: keyof LobbyTimerSettings,
@@ -433,6 +435,8 @@ function WaitingLobbyContent() {
   const debouncedInviteSearch = useDebouncedValue(inviteSearch, 1000);
   const [showFriendsOnlyInvites, setShowFriendsOnlyInvites] = useState(false);
   const [friendIds, setFriendIds] = useState<string[]>([]);
+  const [pendingLobbyFriendRequestIds, setPendingLobbyFriendRequestIds] = useState<Record<string, true>>({});
+  const [addingLobbyFriendRequestById, setAddingLobbyFriendRequestById] = useState<Record<string, boolean>>({});
   const [lobbyTimerSettings, setLobbyTimerSettings] = useState<LobbyTimerSettings>(DEFAULT_LOBBY_TIMERS);
   const [updatingTimerKey, setUpdatingTimerKey] = useState<string>("");
   const [togglingReady, setTogglingReady] = useState(false);
@@ -615,9 +619,10 @@ function WaitingLobbyContent() {
           );
           const status = String(me?.status ?? "").trim().toUpperCase();
           if (status === "LOBBY") {
-            const confirmed = window.confirm(
-              "You are already in a lobby. Creating a new lobby will leave your current lobby. Continue?",
-            );
+            const confirmed = await showTimedConfirmation({
+              title: "You are already in a lobby. Creating a new lobby will leave your current lobby. Continue?",
+              timeoutSeconds: 10,
+            });
             if (!confirmed) {
               if (active) {
                 setLoading(false);
@@ -1020,6 +1025,83 @@ function WaitingLobbyContent() {
 
   const usersForInvite = useMemo(() => inviteUsersApi, [inviteUsersApi]);
   const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
+
+  const canAddLobbyFriend = useCallback((targetUserId?: number) => {
+    const normalizedTargetId = String(targetUserId ?? "").trim();
+    if (!token.trim() || !normalizedTargetId) {
+      return false;
+    }
+    if (normalizedTargetId === normalizedUserId) {
+      return false;
+    }
+    if (friendIdSet.has(normalizedTargetId)) {
+      return false;
+    }
+    if (pendingLobbyFriendRequestIds[normalizedTargetId]) {
+      return false;
+    }
+    if (addingLobbyFriendRequestById[normalizedTargetId]) {
+      return false;
+    }
+    return true;
+  }, [
+    addingLobbyFriendRequestById,
+    friendIdSet,
+    normalizedUserId,
+    pendingLobbyFriendRequestIds,
+    token,
+  ]);
+
+  const handleLobbyFriendRequest = useCallback(async (targetUserId?: number, targetUsername?: string) => {
+    const authToken = token.trim();
+    const normalizedTargetId = String(targetUserId ?? "").trim();
+    const normalizedTargetUsername = String(targetUsername ?? "").trim() || "this user";
+    if (!authToken || !canAddLobbyFriend(targetUserId)) {
+      return;
+    }
+    const confirmed = await showTimedConfirmation({
+      title: `Do you really want to add ${normalizedTargetUsername} to your friendlist?`,
+      timeoutSeconds: 10,
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setAddingLobbyFriendRequestById((previous) => ({
+      ...previous,
+      [normalizedTargetId]: true,
+    }));
+    try {
+      await api.postWithAuth<void>(
+        `/users/me/friends/requests/${encodeURIComponent(normalizedTargetId)}`,
+        {},
+        authToken,
+      );
+      setPendingLobbyFriendRequestIds((previous) => ({
+        ...previous,
+        [normalizedTargetId]: true,
+      }));
+    } catch (error) {
+      const status = (error as ApplicationError)?.status;
+      const message = error instanceof Error ? error.message : "";
+      if (status === 409) {
+        setPendingLobbyFriendRequestIds((previous) => ({
+          ...previous,
+          [normalizedTargetId]: true,
+        }));
+      } else if (message) {
+        alert(`Could not send friend request:\n${message}`);
+      } else {
+        alert("Could not send friend request.");
+      }
+    } finally {
+      setAddingLobbyFriendRequestById((previous) => {
+        const next = { ...previous };
+        delete next[normalizedTargetId];
+        return next;
+      });
+    }
+  }, [api, canAddLobbyFriend, token]);
 
   const characterByUsername = useMemo(() => {
     const mapping: Record<string, string> = {};
@@ -1657,11 +1739,13 @@ function WaitingLobbyContent() {
       return;
     }
 
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm("Leave this lobby and return to dashboard?");
-      if (!confirmed) {
-        return;
-      }
+    const confirmed = await showTimedConfirmation({
+      title: "Leave this lobby and return to dashboard?",
+      timeoutSeconds: 10,
+      danger: true,
+    });
+    if (!confirmed) {
+      return;
     }
 
     setLeavingLobby(true);
@@ -1850,88 +1934,124 @@ function WaitingLobbyContent() {
               className="lobby-players-list"
               dataSource={lobbySlots}
               rowKey={(slot) => slot.key}
-              renderItem={(slot) => (
-                <List.Item
-                  className={`lobby-slot-row lobby-slot-highlight-row${slot.isViewer ? " lobby-slot-highlight-row-active" : ""}${slot.isOpenSlot ? " lobby-slot-row-open" : ""}`}
-                >
-                  <div className="lobby-slot-label">
-                    {slot.occupied ? (
-                      <span className="lobby-slot-avatar-wrap" aria-hidden="true">
-                        {(() => {
-                          const avatarMode = avatarModeByUsername[slot.usernameKey] ?? (slot.ready ? "thumbsup" : "idle");
-                          const avatarFrame = avatarFrameByUsername[slot.usernameKey] ?? 1;
-                          const avatarVariant =
-                            avatarMode === "waving"
-                              ? "waving"
-                              : avatarMode === "thumbsup"
-                                ? "thumbsup"
-                                : "profile";
-                          return (
-                        <CharacterAvatar
-                          characterId={slot.profileCharacterId || characterByUsername[slot.usernameKey]}
-                          primaryColorId={
-                            stableCharacterColorByUsername[slot.usernameKey] ||
-                            slot.characterColorId
-                          }
-                          variant={avatarVariant}
-                          frame={avatarFrame}
-                          alt=""
-                          width={56}
-                          height={56}
-                          className="lobby-slot-avatar"
-                        />
-                          );
-                        })()}
-                      </span>
-                    ) : null}
-                    <span className={slot.isOpenSlot ? "lobby-open-slot-text" : ""}>
-                      {slot.label}
-                    </span>
-                  </div>
-                  <span
-                    className={`lobby-slot-status-pill lobby-slot-status-btn${slot.status === "Host" ? " lobby-slot-status-host" : ""}${slot.status === "Joined" ? " lobby-slot-status-joined" : ""}${slot.status === "Open" ? " lobby-slot-status-open" : ""}`}
+              renderItem={(slot) => {
+                const canAddFriendFromSlot = slot.occupied && canAddLobbyFriend(slot.userId);
+                return (
+                  <List.Item
+                    className={`lobby-slot-row lobby-slot-highlight-row${slot.isViewer ? " lobby-slot-highlight-row-active" : ""}${slot.isOpenSlot ? " lobby-slot-row-open" : ""}`}
                   >
-                    {slot.status === "Host" ? `Host ${HOST_CROWN}` : slot.status}
-                  </span>
-                  <div className="lobby-slot-actions">
-                    {userIsHost && slot.occupied && !slot.isHost ? ( // only host can kick in this lobby type
-                      <Popconfirm
-                        title={`Do you really want to kick ${slot.label}?`}
-                        okText="YES, KICK HIM"
-                        cancelText="NO"
-                        arrow={false}
-                        overlayStyle={{ background: "transparent" }}
-                        overlayInnerStyle={{
-                          background: "rgba(58, 58, 58, 0.96)",
-                          border: "1px solid rgba(0, 0, 0, 0.5)",
-                          boxShadow: "0 10px 24px rgba(0, 0, 0, 0.45)",
-                          padding: "14px 16px",
+                    <div className={`lobby-slot-label${canAddFriendFromSlot ? " lobby-slot-label-friend-action" : ""}`}>
+                      {slot.occupied ? (
+                        <span
+                          className={`lobby-slot-avatar-wrap${canAddFriendFromSlot ? " lobby-slot-avatar-wrap-action" : ""}`}
+                          role={canAddFriendFromSlot ? "button" : undefined}
+                          tabIndex={canAddFriendFromSlot ? 0 : undefined}
+                          aria-label={canAddFriendFromSlot ? `Add ${slot.label} as friend` : undefined}
+                          onClick={(event) => {
+                            if (!canAddFriendFromSlot) {
+                              return;
+                            }
+                            event.stopPropagation();
+                            void handleLobbyFriendRequest(slot.userId, slot.label);
+                          }}
+                          onKeyDown={(event) => {
+                            if (!canAddFriendFromSlot || (event.key !== "Enter" && event.key !== " ")) {
+                              return;
+                            }
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleLobbyFriendRequest(slot.userId, slot.label);
+                          }}
+                        >
+                          {(() => {
+                            const avatarMode = avatarModeByUsername[slot.usernameKey] ?? (slot.ready ? "thumbsup" : "idle");
+                            const avatarFrame = avatarFrameByUsername[slot.usernameKey] ?? 1;
+                            const avatarVariant =
+                              avatarMode === "waving"
+                                ? "waving"
+                                : avatarMode === "thumbsup"
+                                  ? "thumbsup"
+                                  : "profile";
+                            return (
+                              <CharacterAvatar
+                                characterId={slot.profileCharacterId || characterByUsername[slot.usernameKey]}
+                                primaryColorId={
+                                  stableCharacterColorByUsername[slot.usernameKey] ||
+                                  slot.characterColorId
+                                }
+                                variant={avatarVariant}
+                                frame={avatarFrame}
+                                alt=""
+                                width={56}
+                                height={56}
+                                className="lobby-slot-avatar"
+                              />
+                            );
+                          })()}
+                        </span>
+                      ) : null}
+                      <span
+                        className={`${slot.isOpenSlot ? "lobby-open-slot-text" : ""}${canAddFriendFromSlot ? " lobby-slot-name-action" : ""}`}
+                        role={canAddFriendFromSlot ? "button" : undefined}
+                        tabIndex={canAddFriendFromSlot ? 0 : undefined}
+                        aria-label={canAddFriendFromSlot ? `Add ${slot.label} as friend` : undefined}
+                        onClick={(event) => {
+                          if (!canAddFriendFromSlot) {
+                            return;
+                          }
+                          event.stopPropagation();
+                          void handleLobbyFriendRequest(slot.userId, slot.label);
                         }}
-                        okButtonProps={{ danger: true, type: "primary" }}
-                        cancelButtonProps={{ type: "default" }}
-                        overlayClassName="lobby-kick-confirm"
-                        onConfirm={() => {
-                          const authToken = token.trim();
-                          if (!authToken || !sessionId) return;
-                          const playerToKickId = slot.userId;
-                          if (!playerToKickId) return;
-                          void api.deleteWithAuth(
-                          `/lobbies/${encodeURIComponent(sessionId)}/players/${playerToKickId}`,
-                          authToken,
-                          ).then(() => void loadView());
+                        onKeyDown={(event) => {
+                          if (!canAddFriendFromSlot || (event.key !== "Enter" && event.key !== " ")) {
+                            return;
+                          }
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleLobbyFriendRequest(slot.userId, slot.label);
                         }}
                       >
+                        {slot.label}
+                      </span>
+                    </div>
+                    <span
+                      className={`lobby-slot-status-pill lobby-slot-status-btn${slot.status === "Host" ? " lobby-slot-status-host" : ""}${slot.status === "Joined" ? " lobby-slot-status-joined" : ""}${slot.status === "Open" ? " lobby-slot-status-open" : ""}`}
+                    >
+                      {slot.status === "Host" ? `Host ${HOST_CROWN}` : slot.status}
+                    </span>
+                    <div className="lobby-slot-actions">
+                      {userIsHost && slot.occupied && !slot.isHost ? ( // only host can kick in this lobby type
                         <Button
                           className="lobby-kick-btn lobby-kick-btn-host"
                           title={`Kick ${slot.label}`}
+                          onClick={async () => {
+                            const authToken = token.trim();
+                            if (!authToken || !sessionId) return;
+                            const playerToKickId = slot.userId;
+                            if (!playerToKickId) return;
+                            const confirmed = await showTimedConfirmation({
+                              title: `Do you really want to kick ${slot.label}?`,
+                              okText: "Yes, kick",
+                              cancelText: "No",
+                              timeoutSeconds: 10,
+                              danger: true,
+                            });
+                            if (!confirmed) {
+                              return;
+                            }
+                            void api.deleteWithAuth(
+                              `/lobbies/${encodeURIComponent(sessionId)}/players/${playerToKickId}`,
+                              authToken,
+                            ).then(() => void loadView());
+                          }}
                         >
                           <span className="lobby-kick-icon">{KICK_ICON}</span>
                         </Button>
-                      </Popconfirm>
-                    ) : null}
-                  </div>
-                </List.Item>
-              )}
+                      ) : null}
+                    </div>
+                  </List.Item>
+                );
+              }}
             />
           </Card>
           {/* Add a section in the Lobby view to display the names of users currently spectating.#49 */}
@@ -1949,29 +2069,74 @@ function WaitingLobbyContent() {
                       className="lobby-players-list"
                       dataSource={spectators}
                       rowKey={(spectator) => String(spectator.userId ?? spectator.username)}
-                      renderItem={(spectator) => (
+                      renderItem={(spectator) => {
+                        const canAddFriendFromSpectator = canAddLobbyFriend(spectator.userId);
+                        return (
                           <List.Item className="lobby-slot-row lobby-slot-highlight-row">
-                              <div className="lobby-slot-label">
-                                  <span className="lobby-slot-avatar-wrap" aria-hidden="true">
-                                      <CharacterAvatar
-                                          characterId={spectator.profileCharacterId || characterByUsername[normalizeValue(spectator.username)]}
-                                          primaryColorId={
-                                            stableCharacterColorByUsername[normalizeValue(spectator.username)] ||
-                                            spectator.characterColorId
-                                          }
-                                          alt=""
-                                          width={56}
-                                          height={56}
-                                          className="lobby-slot-avatar"
-                                      />
-                                  </span>
-                                  <span>{spectator.username}</span>
-                              </div>
-                              <span className="lobby-slot-status-pill lobby-slot-status-open">
-                                  Spectating
+                            <div className={`lobby-slot-label${canAddFriendFromSpectator ? " lobby-slot-label-friend-action" : ""}`}>
+                              <span
+                                className={`lobby-slot-avatar-wrap${canAddFriendFromSpectator ? " lobby-slot-avatar-wrap-action" : ""}`}
+                                role={canAddFriendFromSpectator ? "button" : undefined}
+                                tabIndex={canAddFriendFromSpectator ? 0 : undefined}
+                                aria-label={canAddFriendFromSpectator ? `Add ${spectator.username} as friend` : undefined}
+                                onClick={(event) => {
+                                  if (!canAddFriendFromSpectator) {
+                                    return;
+                                  }
+                                  event.stopPropagation();
+                                  void handleLobbyFriendRequest(spectator.userId, spectator.username);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (!canAddFriendFromSpectator || (event.key !== "Enter" && event.key !== " ")) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleLobbyFriendRequest(spectator.userId, spectator.username);
+                                }}
+                              >
+                                <CharacterAvatar
+                                  characterId={spectator.profileCharacterId || characterByUsername[normalizeValue(spectator.username)]}
+                                  primaryColorId={
+                                    stableCharacterColorByUsername[normalizeValue(spectator.username)] ||
+                                    spectator.characterColorId
+                                  }
+                                  alt=""
+                                  width={56}
+                                  height={56}
+                                  className="lobby-slot-avatar"
+                                />
                               </span>
+                              <span
+                                className={canAddFriendFromSpectator ? "lobby-slot-name-action" : ""}
+                                role={canAddFriendFromSpectator ? "button" : undefined}
+                                tabIndex={canAddFriendFromSpectator ? 0 : undefined}
+                                aria-label={canAddFriendFromSpectator ? `Add ${spectator.username} as friend` : undefined}
+                                onClick={(event) => {
+                                  if (!canAddFriendFromSpectator) {
+                                    return;
+                                  }
+                                  event.stopPropagation();
+                                  void handleLobbyFriendRequest(spectator.userId, spectator.username);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (!canAddFriendFromSpectator || (event.key !== "Enter" && event.key !== " ")) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleLobbyFriendRequest(spectator.userId, spectator.username);
+                                }}
+                              >
+                                {spectator.username}
+                              </span>
+                            </div>
+                            <span className="lobby-slot-status-pill lobby-slot-status-open">
+                              Spectating
+                            </span>
                           </List.Item>
-                      )}
+                        );
+                      }}
                   />
               </Card>
 	          )}
@@ -2035,6 +2200,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Game AFK/DC Timeout (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.afkTimeoutSeconds.min}
                         max={TIMER_LIMITS.afkTimeoutSeconds.max}
                         step={30}
@@ -2062,6 +2228,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Lobby Disconnect Grace (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.websocketGraceSeconds.min}
                         max={TIMER_LIMITS.websocketGraceSeconds.max}
                         step={30}
@@ -2089,6 +2256,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Initial Peek (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.initialPeekSeconds.min}
                         max={TIMER_LIMITS.initialPeekSeconds.max}
                         step={1}
@@ -2117,6 +2285,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Turn Timer (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.turnSeconds.min}
                         max={TIMER_LIMITS.turnSeconds.max}
                         step={1}
@@ -2144,6 +2313,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Peek/Spy Reveal (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.abilityRevealSeconds.min}
                         max={TIMER_LIMITS.abilityRevealSeconds.max}
                         step={1}
@@ -2171,6 +2341,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Swap Ability (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.abilitySwapSeconds.min}
                         max={TIMER_LIMITS.abilitySwapSeconds.max}
                         step={1}
@@ -2199,6 +2370,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Absent Round Score (pts)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.absentRoundPoints.min}
                         max={TIMER_LIMITS.absentRoundPoints.max}
                         step={1}
@@ -2227,6 +2399,7 @@ function WaitingLobbyContent() {
                     <span className="lobby-setting-row-label">Chat Cooldown (sec)</span>
                     <div className="lobby-setting-row-control">
                       <Slider
+                        tooltip={LOBBY_SETTINGS_SLIDER_TOOLTIP}
                         min={TIMER_LIMITS.chatCooldownSeconds.min}
                         max={TIMER_LIMITS.chatCooldownSeconds.max}
                         step={1}

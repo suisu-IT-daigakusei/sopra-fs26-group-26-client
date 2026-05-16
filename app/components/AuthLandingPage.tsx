@@ -24,6 +24,8 @@ interface AuthFormValues {
 }
 
 const BIO_MAX_LENGTH = 180;
+const REGISTER_USERNAME_HINT = "Username must be 1-16 characters and use only A-Z, a-z and 0-9.";
+const REGISTER_PASSWORD_HINT = "Password must be 8-32 characters, include at least one uppercase letter and one special symbol and use only A-Z, a-z, 0-9 and !\"#$%&'()*+,-./:;<=>?@[\\\\]^_`{|}~.";
 
 const AuthLandingPage: React.FC = () => {
   const [isRegister, setIsRegister] = useState(false);
@@ -31,6 +33,8 @@ const AuthLandingPage: React.FC = () => {
   const apiService = useApi();
   const [form] = Form.useForm<AuthFormValues>();
   const [authRules, setAuthRules] = useState<AuthValidationRules>(getFallbackAuthValidationRules());
+  const usernameDraft = Form.useWatch("username", form);
+  const passwordDraft = Form.useWatch("password", form);
 
   const {
     value: token,
@@ -46,6 +50,16 @@ const AuthLandingPage: React.FC = () => {
 
   const normalizedToken = typeof token === "string" ? token.trim() : "";
   const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
+  const normalizedUsernameDraft = String(usernameDraft ?? "");
+  const normalizedPasswordDraft = String(passwordDraft ?? "");
+  const usernameRuleError =
+    isRegister && form.isFieldTouched("username")
+      ? validateUsername(normalizedUsernameDraft, authRules)
+      : null;
+  const passwordRuleError =
+    isRegister && form.isFieldTouched("password")
+      ? validatePassword(normalizedPasswordDraft, authRules)
+      : null;
 
   useEffect(() => {
     form.resetFields();
@@ -150,19 +164,18 @@ const AuthLandingPage: React.FC = () => {
       <div className="login-container login-landing-container">
         <div className="login-landing-shell">
           <section className="login-hero-panel" aria-label="Welcome">
-            <p className="login-hero-kicker">Moonlit Card Strategy</p>
             <h1 className="login-hero-title">
               {isRegister ? "Join Cabo" : "Welcome to Cabo"}
             </h1>
             <p className="login-hero-subtitle">
               {isRegister
-                ? "Create your account and start your first round in seconds."
-                : "Read the table, manage risk, and call Cabo at exactly the right time."}
+                ? "Train memory, deduction, and bluffing in fast Cabo rounds."
+                : "Memorize hidden cards, track swaps, and call Cabo when you believe your score is lowest."}
             </p>
             <div className="login-hero-badges" aria-hidden="true">
-              <span className="login-hero-badge">2-4 Players</span>
-              <span className="login-hero-badge">Fast Rounds</span>
-              <span className="login-hero-badge">Live Lobbies</span>
+              <span className="login-hero-badge">Memory First</span>
+              <span className="login-hero-badge">Deduction + Bluffing</span>
+              <span className="login-hero-badge">Lowest Score Wins</span>
             </div>
           </section>
           <div className="form-card login-form-card">
@@ -170,7 +183,7 @@ const AuthLandingPage: React.FC = () => {
               <h2 className="login-form-title">{isRegister ? "Create Account" : "Sign In"}</h2>
               <p className="login-form-subtitle">
                 {isRegister
-                  ? "Set your credentials and optional bio."
+                  ? "Create your account and jump into the game."
                   : "Continue your session and jump back into the game."}
               </p>
             </div>
@@ -187,7 +200,12 @@ const AuthLandingPage: React.FC = () => {
               <Form.Item
                 name="username"
                 label={<span className="form-label-required">Username<span className="form-label-required-star">*</span></span>}
-                extra={isRegister ? <span className="auth-input-hint">{authRules.username.hint}</span> : undefined}
+                validateStatus={isRegister && usernameRuleError ? "error" : undefined}
+                help={isRegister ? (
+                  <span className={`auth-input-hint${usernameRuleError ? " auth-input-hint-error" : ""}`}>
+                    {REGISTER_USERNAME_HINT}
+                  </span>
+                ) : undefined}
                 rules={[
                   { required: true, message: "Please input your username!" },
                   ...(isRegister
@@ -201,7 +219,7 @@ const AuthLandingPage: React.FC = () => {
                           if (!error) {
                             return;
                           }
-                          throw new Error(error);
+                          throw new Error(" ");
                         },
                       }]
                     : []),
@@ -221,7 +239,12 @@ const AuthLandingPage: React.FC = () => {
               <Form.Item
                 name="password"
                 label={<span className="form-label-required">Password<span className="form-label-required-star">*</span></span>}
-                extra={isRegister ? <span className="auth-input-hint">{authRules.password.hint}</span> : undefined}
+                validateStatus={isRegister && passwordRuleError ? "error" : undefined}
+                help={isRegister ? (
+                  <span className={`auth-input-hint${passwordRuleError ? " auth-input-hint-error" : ""}`}>
+                    {REGISTER_PASSWORD_HINT}
+                  </span>
+                ) : undefined}
                 rules={[
                   { required: true, message: "Please input your password!" },
                   ...(isRegister
@@ -235,7 +258,7 @@ const AuthLandingPage: React.FC = () => {
                           if (!error) {
                             return;
                           }
-                          throw new Error(error);
+                          throw new Error(" ");
                         },
                       }]
                     : []),
