@@ -24,8 +24,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cabo",
-  description: "sopra-fs26-template-client",
+  title: "Cabo Game",
+  description: "Play Cabo with friends online",
 };
 
 export default function RootLayout({
