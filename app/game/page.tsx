@@ -4524,13 +4524,17 @@ useLayoutEffect(() => {
             return;
         }
 
-        const availableWidth = Math.max(0, laneElement.clientWidth - 8);
-        const availableHeight = Math.max(0, laneElement.clientHeight - 8);
+        const computed = window.getComputedStyle(nameElement);
+        const paddingLeft = Number.parseFloat(computed.paddingLeft) || 0;
+        const paddingRight = Number.parseFloat(computed.paddingRight) || 0;
+        const paddingTop = Number.parseFloat(computed.paddingTop) || 0;
+        const paddingBottom = Number.parseFloat(computed.paddingBottom) || 0;
+        const availableWidth = Math.max(0, laneElement.clientWidth - paddingLeft - paddingRight);
+        const availableHeight = Math.max(0, laneElement.clientHeight - paddingTop - paddingBottom);
         if (availableWidth < 8 || availableHeight < 8) {
             return;
         }
 
-        const computed = window.getComputedStyle(nameElement);
         const probe = document.createElement("span");
         probe.textContent = usernameText;
         probe.style.position = "absolute";
@@ -4544,24 +4548,27 @@ useLayoutEffect(() => {
         probe.style.lineHeight = "1";
         laneElement.appendChild(probe);
 
-        let low = 12;
-        let high = Math.max(12, Math.floor(Math.min(availableHeight, 220)));
-        let best = low;
+        try {
+            let low = 12;
+            let high = Math.max(12, Math.floor(Math.min(availableHeight, 220)));
+            let best = low;
 
-        while (low <= high) {
-            const mid = Math.floor((low + high) / 2);
-            probe.style.fontSize = `${mid}px`;
-            const fits = probe.offsetWidth <= availableWidth && probe.offsetHeight <= availableHeight;
-            if (fits) {
-                best = mid;
-                low = mid + 1;
-            } else {
-                high = mid - 1;
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                probe.style.fontSize = `${mid}px`;
+                const fits = probe.offsetWidth <= availableWidth && probe.offsetHeight <= availableHeight;
+                if (fits) {
+                    best = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
             }
-        }
 
-        laneElement.removeChild(probe);
-        setCaboRevealPlayerNameFontPx((prev) => (Math.abs(prev - best) < 0.5 ? prev : best));
+            setCaboRevealPlayerNameFontPx((prev) => (Math.abs(prev - best) < 0.5 ? prev : best));
+        } finally {
+            laneElement.removeChild(probe);
+        }
     };
 
     const scheduleFit = () => {

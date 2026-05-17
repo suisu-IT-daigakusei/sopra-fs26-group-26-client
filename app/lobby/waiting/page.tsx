@@ -507,6 +507,22 @@ function WaitingLobbyContent() {
     }
   }, [api, launchToGame, token]);
 
+  const resolveCurrentWaitingSessionId = useCallback(async (): Promise<string> => {
+    const authToken = token.trim();
+    if (!authToken) {
+      return "";
+    }
+    try {
+      const myWaitingLobby = await api.getWithAuth<LobbySession>(
+        "/lobbies/my/waiting",
+        authToken,
+      );
+      return String(myWaitingLobby?.sessionId ?? "").trim();
+    } catch {
+      return "";
+    }
+  }, [api, token]);
+
   useEffect(() => {
     const authToken = token.trim();
     const sessionId = sessionIdParam.trim();
@@ -800,7 +816,19 @@ function WaitingLobbyContent() {
       });
     } catch (error: unknown) {
       const status = (error as ApplicationError)?.status;
-      if (status === 401 || status === 403 || status === 404) {
+      if (status === 401) {
+        router.replace("/dashboard?kicked=1");
+        return;
+      }
+      if (status === 403 || status === 404) {
+        await tryLaunchFromActiveGameFallback();
+        const recoveredSessionId = await resolveCurrentWaitingSessionId();
+        if (recoveredSessionId) {
+          if (normalizeValue(recoveredSessionId) !== normalizeValue(sessionId)) {
+            router.replace(`/lobby/${encodeURIComponent(recoveredSessionId)}`);
+          }
+          return;
+        }
         router.replace("/dashboard?kicked=1");
         return;
       }
@@ -809,7 +837,7 @@ function WaitingLobbyContent() {
     } finally {
       setLoading(false);
     }
-  }, [api, router, token, sessionIdParam]);
+  }, [api, router, token, sessionIdParam, tryLaunchFromActiveGameFallback, resolveCurrentWaitingSessionId]);
 
   useEffect(() => {
     if (!sessionIdParam.trim()) {

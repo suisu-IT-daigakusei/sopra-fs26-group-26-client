@@ -1,6 +1,6 @@
 "use client"; // all users, even oneself, uses this page now, reworked as a result
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
@@ -12,12 +12,27 @@ import { resolveCharacterColorId } from "@/utils/userSettings";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import { deriveUserOutcomeStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { formatLocalDate, formatLocalDateTime, localDateSearchToken, toEpochMs } from "@/utils/dateTime";
+import { showTimedConfirmation } from "@/utils/timedConfirmation";
+import { LoadingOutlined } from "@ant-design/icons";
 import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
 const DEFAULT_BIO = "This player hasn't added a bio yet."; //placeholder default text
 const RESULTS_PAGE_SIZE = 6; // can be changed
 const NO_RESULTS_TEXT = "This user has not played a game yet."; // to show a line
+const FRIEND_ACTION_MIN_LOADING_MS = 800;
+const FRIEND_REQUEST_STATUS_POLL_MS = 4000;
+
+async function keepLoadingVisible(startedAtMs: number) {
+  const elapsedMs = Date.now() - startedAtMs;
+  const remainingMs = FRIEND_ACTION_MIN_LOADING_MS - elapsedMs;
+  if (remainingMs <= 0) {
+    return;
+  }
+  await new Promise((resolve) => {
+    setTimeout(resolve, remainingMs);
+  });
+}
 
 type ProfileResultRow = {
   key: string;
@@ -439,10 +454,177 @@ const UserProfilePage: React.FC = () => {
   const [resultsLobbyCodeQuery, setResultsLobbyCodeQuery] = useState("");
   const [resultsDateQuery, setResultsDateQuery] = useState("");
   const [winnerNameByUserId, setWinnerNameByUserId] = useState<Record<string, string>>({});
+  const [friendIds, setFriendIds] = useState<string[]>([]);
+  const [pendingFriendRequestIds, setPendingFriendRequestIds] = useState<Record<string, true>>({});
+  const [addingFriendById, setAddingFriendById] = useState<Record<string, boolean>>({});
+  const [removingFriendById, setRemovingFriendById] = useState<Record<string, boolean>>({});
 
   const viewedUserId = String(params?.id ?? "").trim();
   const ownUserId = String(storedUserId ?? "").trim();
   const isOwnProfile = viewedUserId.length > 0 && ownUserId === viewedUserId;
+  const authToken = String(token ?? "").trim();
+
+  const reconcilePendingRequests = useCallback((acceptedFriendIds: string[]) => {
+    const acceptedSet = new Set(acceptedFriendIds);
+    setPendingFriendRequestIds((previous) => {
+      const next: Record<string, true> = {};
+      Object.keys(previous).forEach((id) => {
+        if (!acceptedSet.has(id)) {
+          next[id] = true;
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  const loadFriendIds = useCallback(async () => {
+    if (!authToken) {
+      setFriendIds([]);
+      return [];
+    }
+
+    try {
+      const payload = await apiService.getWithAuth<Array<string | number>>(
+        "/users/me/friends/ids",
+        authToken,
+      );
+      const normalized = (payload ?? [])
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0);
+      setFriendIds(normalized);
+      return normalized;
+    } catch {
+      setFriendIds([]);
+      return [];
+    }
+  }, [apiService, authToken]);
+
+  const loadOutgoingPendingFriendRequestIds = useCallback(async () => {
+    if (!authToken) {
+      setPendingFriendRequestIds({});
+      return [];
+    }
+
+    try {
+      const payload = await apiService.getWithAuth<Array<string | number>>(
+        "/users/me/friends/requests/outgoing/ids",
+        authToken,
+      );
+      const normalized = (payload ?? [])
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => entry.length > 0);
+      setPendingFriendRequestIds(
+        normalized.reduce<Record<string, true>>((acc, id) => {
+          acc[id] = true;
+          return acc;
+        }, {}),
+      );
+      return normalized;
+    } catch {
+      return [];
+    }
+  }, [apiService, authToken]);
+
+  const handleAddFriend = useCallback(async (targetUserId: string, targetUsername: string) => {
+    const normalizedTargetId = String(targetUserId ?? "").trim();
+    const normalizedTargetUsername = String(targetUsername ?? "").trim() || "this user";
+    if (!authToken || !normalizedTargetId) {
+      return;
+    }
+    const confirmed = await showTimedConfirmation({
+      title: `Do you really want to add ${normalizedTargetUsername} to your friendlist?`,
+      timeoutSeconds: 10,
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setAddingFriendById((previous) => ({
+      ...previous,
+      [normalizedTargetId]: true,
+    }));
+    const startedAtMs = Date.now();
+    try {
+      await apiService.postWithAuth<void>(
+        `/users/me/friends/requests/${encodeURIComponent(normalizedTargetId)}`,
+        {},
+        authToken,
+      );
+      setPendingFriendRequestIds((previous) => ({
+        ...previous,
+        [normalizedTargetId]: true,
+      }));
+      const [acceptedIds] = await Promise.all([
+        loadFriendIds(),
+        loadOutgoingPendingFriendRequestIds(),
+      ]);
+      if (acceptedIds.includes(normalizedTargetId)) {
+        setPendingFriendRequestIds((previous) => {
+          const next = { ...previous };
+          delete next[normalizedTargetId];
+          return next;
+        });
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not send friend request:\n${error.message}`);
+      } else {
+        alert("Could not send friend request.");
+      }
+    } finally {
+      await keepLoadingVisible(startedAtMs);
+      setAddingFriendById((previous) => ({
+        ...previous,
+        [normalizedTargetId]: false,
+      }));
+    }
+  }, [apiService, authToken, loadFriendIds, loadOutgoingPendingFriendRequestIds]);
+
+  const handleRemoveFriend = useCallback(async (targetUserId: string, targetUsername: string) => {
+    const normalizedTargetId = String(targetUserId ?? "").trim();
+    const normalizedTargetUsername = String(targetUsername ?? "").trim() || "this user";
+    if (!authToken || !normalizedTargetId) {
+      return;
+    }
+    const confirmed = await showTimedConfirmation({
+      title: `Do you really want to remove ${normalizedTargetUsername} from your friendlist?`,
+      timeoutSeconds: 10,
+      danger: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setRemovingFriendById((previous) => ({
+      ...previous,
+      [normalizedTargetId]: true,
+    }));
+    const startedAtMs = Date.now();
+    try {
+      await apiService.deleteWithAuth<void>(
+        `/users/me/friends/${encodeURIComponent(normalizedTargetId)}`,
+        authToken,
+      );
+      setPendingFriendRequestIds((previous) => {
+        const next = { ...previous };
+        delete next[normalizedTargetId];
+        return next;
+      });
+      await Promise.all([loadFriendIds(), loadOutgoingPendingFriendRequestIds()]);
+    } catch (error) {
+      if (error instanceof Error) {
+        alert(`Could not remove friend:\n${error.message}`);
+      } else {
+        alert("Could not remove friend.");
+      }
+    } finally {
+      await keepLoadingVisible(startedAtMs);
+      setRemovingFriendById((previous) => ({
+        ...previous,
+        [normalizedTargetId]: false,
+      }));
+    }
+  }, [apiService, authToken, loadFriendIds, loadOutgoingPendingFriendRequestIds]);
 
   useEffect(() => {
     if (!viewedUserId) {
@@ -480,6 +662,42 @@ const UserProfilePage: React.FC = () => {
       active = false;
     };
   }, [apiService, viewedUserId, router]);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([loadFriendIds(), loadOutgoingPendingFriendRequestIds()]).then(([ids]) => {
+      if (!active) {
+        return;
+      }
+      reconcilePendingRequests(ids);
+    });
+    return () => {
+      active = false;
+    };
+  }, [loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
+
+  useEffect(() => {
+    if (!authToken || typeof window === "undefined") {
+      return;
+    }
+    let active = true;
+    const refreshFriendRequestState = async () => {
+      const acceptedIds = await loadFriendIds();
+      if (!active) {
+        return;
+      }
+      reconcilePendingRequests(acceptedIds);
+      await loadOutgoingPendingFriendRequestIds();
+    };
+    void refreshFriendRequestState();
+    const intervalId = window.setInterval(() => {
+      void refreshFriendRequestState();
+    }, FRIEND_REQUEST_STATUS_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [authToken, loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
 
   useEffect(() => {
     if (!viewedUserId) {
@@ -767,6 +985,37 @@ const UserProfilePage: React.FC = () => {
   const isDefaultBio = shownBio === DEFAULT_BIO;
   const profilePresenceKey = toPresenceKey(user?.status);
   const profilePresenceLabel = user ? toPresenceLabel(profilePresenceKey) : "";
+  const viewedUsername = String(user?.username ?? user?.name ?? viewedUserId).trim() || "this user";
+  const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
+  const isFriend = viewedUserId.length > 0 && friendIdSet.has(viewedUserId);
+  const isAddingFriend = viewedUserId.length > 0 && Boolean(addingFriendById[viewedUserId]);
+  const isRemovingFriend = viewedUserId.length > 0 && Boolean(removingFriendById[viewedUserId]);
+  const isPendingFriendRequest =
+    viewedUserId.length > 0 &&
+    Boolean(pendingFriendRequestIds[viewedUserId]) &&
+    !isAddingFriend;
+  const canAddFriend =
+    !isOwnProfile &&
+    viewedUserId.length > 0 &&
+    authToken.length > 0 &&
+    !isFriend &&
+    !isPendingFriendRequest &&
+    !isRemovingFriend;
+  const canRemoveFriend =
+    !isOwnProfile &&
+    viewedUserId.length > 0 &&
+    authToken.length > 0 &&
+    isFriend;
+  const shouldShowProfileFriendButton =
+    !isOwnProfile &&
+    viewedUserId.length > 0 &&
+    authToken.length > 0;
+  const profileFriendButtonLoading = isAddingFriend || isRemovingFriend || isPendingFriendRequest;
+  const profileFriendActionLabel = canAddFriend
+    ? "Add Friend"
+    : canRemoveFriend
+      ? "Remove Friend"
+      : "Friend Request Sent";
 
   return (
     <div className="cabo-background">
@@ -779,11 +1028,59 @@ const UserProfilePage: React.FC = () => {
               <div className="lobby-section-title-row">
                 <span className="dashboard-section-title">{user?.username?.trim() || "User Profile"}</span>
                 {!loading && user ? (
-                  <span
-                    className={`users-status-pill users-status-${profilePresenceKey} profile-title-status`}
-                  >
-                    {profilePresenceLabel}
-                  </span>
+                  <div className="users-status-action profile-title-status-action">
+                    {shouldShowProfileFriendButton ? (
+                      canRemoveFriend ? (
+                        <Button
+                          type="default"
+                          className="users-friend-remove-btn"
+                          title={profileFriendActionLabel}
+                          aria-label={profileFriendActionLabel}
+                          disabled={!canRemoveFriend || profileFriendButtonLoading}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (profileFriendButtonLoading) {
+                              return;
+                            }
+                            void handleRemoveFriend(viewedUserId, viewedUsername);
+                          }}
+                        >
+                          {profileFriendButtonLoading ? (
+                            <LoadingOutlined spin className="users-friend-action-loading-icon" />
+                          ) : (
+                            <span className="users-friend-action-symbol">{"\u2715"}</span>
+                          )}
+                        </Button>
+                      ) : (
+                        <Button
+                          type="primary"
+                          shape="circle"
+                          className="users-friend-add-btn"
+                          title={profileFriendActionLabel}
+                          aria-label={profileFriendActionLabel}
+                          disabled={!canAddFriend || profileFriendButtonLoading}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (profileFriendButtonLoading) {
+                              return;
+                            }
+                            void handleAddFriend(viewedUserId, viewedUsername);
+                          }}
+                        >
+                          {profileFriendButtonLoading ? (
+                            <LoadingOutlined spin className="users-friend-action-loading-icon" />
+                          ) : (
+                            <span className="users-friend-action-symbol">{"\u002b"}</span>
+                          )}
+                        </Button>
+                      )
+                    ) : null}
+                    <span
+                      className={`users-status-pill users-status-${profilePresenceKey} profile-title-status`}
+                    >
+                      {profilePresenceLabel}
+                    </span>
+                  </div>
                 ) : null}
               </div>
             }

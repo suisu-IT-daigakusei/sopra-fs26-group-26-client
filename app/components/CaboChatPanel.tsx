@@ -8,7 +8,7 @@ import {
   normalizeChatInputForDisplay,
   normalizeChatInputForTransport,
 } from "@/utils/chat";
-import { getStompBrokerUrl } from "@/utils/domain";
+import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
 import { Client } from "@stomp/stompjs";
 import { SendOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
@@ -190,6 +190,18 @@ export default function CaboChatPanel({
     );
   }, [api, normalizedToken]);
 
+  const sendActivityHeartbeat = useCallback(() => {
+    if (!normalizedToken) {
+      return;
+    }
+    void fetch(`${getApiDomain()}/heartbeat`, {
+      method: "POST",
+      headers: { Authorization: normalizedToken },
+    }).catch(() => {
+      // best-effort only
+    });
+  }, [normalizedToken]);
+
   const fetchHistory = useCallback(async (showSpinner: boolean) => {
     if (!isReady) {
       return;
@@ -332,6 +344,7 @@ export default function CaboChatPanel({
       return;
     }
     const text = normalizeChatInputForTransport(trimmedDraft);
+    sendActivityHeartbeat();
     setIsSending(true);
     setError("");
     try {
@@ -398,6 +411,7 @@ export default function CaboChatPanel({
     getSessionCandidates,
     normalizedEffectiveSessionId,
     normalizedToken,
+    sendActivityHeartbeat,
     trimmedDraft,
   ]);
 
