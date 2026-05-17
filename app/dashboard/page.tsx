@@ -14,6 +14,7 @@ import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { deriveUserOutcomeStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import { resolveCharacterColorId } from "@/utils/userSettings";
 import { Button, Card } from "antd";
+import GameTutorialModal from "@/components/GameTutorial";
 
 // Simple 3 variant dynamic greetings on Dashboard
 type GreetingSlot = "morning" | "day" | "afternoon" | "evening" | "night";
@@ -91,6 +92,8 @@ function DashboardContent() {
   const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
   const normalizedToken = typeof token === "string" ? token.trim() : "";
   const liveConnected = useApiConnectionStatus(normalizedUserId, normalizedToken);
+
+  const [isTutorialOpen, setIsTutorialOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const kicked = searchParams.get("kicked");
@@ -390,6 +393,9 @@ function DashboardContent() {
               <Button type="primary" onClick={() => router.push("/settings")}>
                 Settings
               </Button>
+              <Button type="primary" onClick={() => setIsTutorialOpen(true)}>
+                How to Play
+              </Button>
               <Button type="primary" onClick={() => router.push("/credits")}>
                 Help & Credits
               </Button>
@@ -404,6 +410,12 @@ function DashboardContent() {
           </Card>
         </div>
       </div>
+
+    <div style={{ color: "#222222" }}></div>
+      <GameTutorialModal 
+        isOpen={isTutorialOpen} 
+        onClose={() => setIsTutorialOpen(false)} 
+      />
     </div>
   );
 }
