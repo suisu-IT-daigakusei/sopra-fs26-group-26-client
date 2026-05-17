@@ -68,6 +68,9 @@ type GameStateSignal = {
 
 type ActiveGameResponse = {
   gameId?: string | null;
+  status?: string | null;
+  gameStatus?: string | null;
+  phase?: string | null;
 };
 
 type ActiveGameStatusSnapshot = {
@@ -118,6 +121,8 @@ const HOST_CROWN = "\uD83D\uDC51\uFE0E";
 const KICK_ICON = "\u2716";
 const INVITE_PANEL_KEY = "invite-online-players";
 const INVITE_USERS_POLL_MS = 10000;
+const LOBBY_VIEW_POLL_CONNECTED_MS = 10000;
+const LOBBY_VIEW_POLL_DISCONNECTED_MS = 5000;
 const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
   afkTimeoutSeconds: 300,
   websocketGraceSeconds: 300,
@@ -181,13 +186,8 @@ function resolveTimerSettingFromView(
 }
 
 function getAfkWarningLeadSeconds(afkTimeoutSeconds: number): number {
-  if (afkTimeoutSeconds <= 300) {
-    return 60;
-  }
-  if (afkTimeoutSeconds <= 600) {
-    return 180;
-  }
-  return 300;
+  void afkTimeoutSeconds;
+  return 60;
 }
 
 function normalizeValue(value: unknown): string {
@@ -395,6 +395,11 @@ function WaitingLobbyContent() {
   const sessionIdFromPath = String(params?.sessionId ?? "").trim();
   const sessionIdFromQuery = String(searchParams.get("sessionId") ?? "").trim();
   const sessionIdParam = sessionIdFromPath || sessionIdFromQuery;
+  const spectatorModeParam = normalizeValue(searchParams.get("spectator") ?? "");
+  const spectatorModeFromQuery =
+    spectatorModeParam === "1" ||
+    spectatorModeParam === "true" ||
+    spectatorModeParam === "yes";
 
   const api = useApi();
   const { value: token } = useLocalStorage<string>("token", "");
@@ -404,10 +409,18 @@ function WaitingLobbyContent() {
   const { set: setActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
   const { set: setActiveLobbySessionId } = useLocalStorage<string>("activeLobbySessionId", "");
   const { set: setPendingInitialPeekGameId } = useLocalStorage<string>("pendingInitialPeekGameId", "");
+  const { value: spectatorMode, set: setSpectatorMode } = useLocalStorage<string>("spectatorMode", "");
   const { set: setActiveGameStatusSnapshot } = useLocalStorage<ActiveGameStatusSnapshot | null>(
     "activeGameStatusSnapshot",
     null,
   );
+  const spectatorModeFromStorage = normalizeValue(spectatorMode);
+  const isSpectatorLobbyView =
+    spectatorModeFromQuery ||
+    spectatorModeFromStorage === "1" ||
+    spectatorModeFromStorage === "true" ||
+    spectatorModeFromStorage === "yes";
+  const spectatorLobbyQuerySuffix = isSpectatorLobbyView ? "?spectator=1" : "";
   const { sentEntries, loadSent, markPending } = useOutgoingInviteStatuses(
     userId,
     token,
@@ -456,6 +469,11 @@ function WaitingLobbyContent() {
   const hasSeenReadyStateRef = useRef<boolean>(false);
   const previousLobbyReadyStateRef = useRef<boolean>(false);
   const lobbyAfkWarningLoopActiveRef = useRef<boolean>(false);
+  const autoLeaveEmptySpectatorTriggeredRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    setSpectatorMode(isSpectatorLobbyView ? "1" : "");
+  }, [isSpectatorLobbyView, setSpectatorMode]);
 
   const launchToGame = useCallback((rawGameId: unknown, rawStatus?: string, forceInitialPeekBootstrap = false) => {
     const gameId = String(rawGameId ?? "").trim();
@@ -500,7 +518,7 @@ function WaitingLobbyContent() {
       );
       const activeGameId = extractGameId(activeGame);
       if (activeGameId) {
-        launchToGame(activeGameId);
+        launchToGame(activeGameId, extractGameStatus(activeGame));
       }
     } catch {
       // ignore temporary lookup failures
@@ -737,9 +755,6 @@ function WaitingLobbyContent() {
         authToken,
       );
       setView(waitingView);
-      // Add a section in the Lobby view to display the names of users currently spectating.
-      // #49
-      // # 116: TODO: Backend needs to include spectators in WaitingView response
       const rawSpectators = (waitingView as Record<string, unknown>)?.spectators;
       if (Array.isArray(rawSpectators)) {
         setSpectators(rawSpectators.map((spectator) => {
@@ -825,7 +840,7 @@ function WaitingLobbyContent() {
         const recoveredSessionId = await resolveCurrentWaitingSessionId();
         if (recoveredSessionId) {
           if (normalizeValue(recoveredSessionId) !== normalizeValue(sessionId)) {
-            router.replace(`/lobby/${encodeURIComponent(recoveredSessionId)}`);
+            router.replace(`/lobby/${encodeURIComponent(recoveredSessionId)}${spectatorLobbyQuerySuffix}`);
           }
           return;
         }
@@ -837,7 +852,15 @@ function WaitingLobbyContent() {
     } finally {
       setLoading(false);
     }
-  }, [api, router, token, sessionIdParam, tryLaunchFromActiveGameFallback, resolveCurrentWaitingSessionId]);
+  }, [
+    api,
+    resolveCurrentWaitingSessionId,
+    router,
+    sessionIdParam,
+    spectatorLobbyQuerySuffix,
+    token,
+    tryLaunchFromActiveGameFallback,
+  ]);
 
   useEffect(() => {
     if (!sessionIdParam.trim()) {
@@ -920,7 +943,7 @@ function WaitingLobbyContent() {
       return;
     }
 
-    const pollMs = lobbyWsConnected ? 5000 : 2500;
+    const pollMs = lobbyWsConnected ? LOBBY_VIEW_POLL_CONNECTED_MS : LOBBY_VIEW_POLL_DISCONNECTED_MS;
     const pollId = setInterval(() => {
       void loadView();
       void loadSent();
@@ -1053,6 +1076,26 @@ function WaitingLobbyContent() {
 
   const usersForInvite = useMemo(() => inviteUsersApi, [inviteUsersApi]);
   const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
+  const readonlyLobbySettingsRows = useMemo(
+    () => [
+      { label: "Game AFK/DC Timeout (sec)", value: `${lobbyTimerSettings.afkTimeoutSeconds}s` },
+      { label: "Lobby Disconnect Grace (sec)", value: `${lobbyTimerSettings.websocketGraceSeconds}s` },
+      { label: "Initial Peek (sec)", value: `${lobbyTimerSettings.initialPeekSeconds}s` },
+      { label: "Turn Timer (sec)", value: `${lobbyTimerSettings.turnSeconds}s` },
+      { label: "Peek/Spy Reveal (sec)", value: `${lobbyTimerSettings.abilityRevealSeconds}s` },
+      { label: "Swap Ability (sec)", value: `${lobbyTimerSettings.abilitySwapSeconds}s` },
+      { label: "Absent Round Score (pts)", value: `${lobbyTimerSettings.absentRoundPoints}pts` },
+    ],
+    [
+      lobbyTimerSettings.afkTimeoutSeconds,
+      lobbyTimerSettings.websocketGraceSeconds,
+      lobbyTimerSettings.initialPeekSeconds,
+      lobbyTimerSettings.turnSeconds,
+      lobbyTimerSettings.abilityRevealSeconds,
+      lobbyTimerSettings.abilitySwapSeconds,
+      lobbyTimerSettings.absentRoundPoints,
+    ],
+  );
 
   const canAddLobbyFriend = useCallback((targetUserId?: number) => {
     const normalizedTargetId = String(targetUserId ?? "").trim();
@@ -1486,10 +1529,12 @@ function WaitingLobbyContent() {
   );
 
   const sessionId = String(view?.sessionId ?? sessionIdParam ?? "").trim();
+  const spectatorCount = spectators.length;
   const everyoneReadyForStart = presentCount >= 2 && allNonHostPlayersReady;
   const lobbyConnectionIsGreen = lobbyApiConnected;
   const lobbyAfkWarningLeadSeconds = getAfkWarningLeadSeconds(lobbyTimerSettings.afkTimeoutSeconds);
   const showLobbyAfkWarning =
+    !isSpectatorLobbyView &&
     sessionId.length > 0 &&
     lobbyAfkRemainingSeconds <= lobbyAfkWarningLeadSeconds;
 
@@ -1541,6 +1586,70 @@ function WaitingLobbyContent() {
       }
     };
   }, [showLobbyAfkWarning]);
+
+  useEffect(() => {
+    if (!isSpectatorLobbyView || loading || sessionId.length === 0) {
+      autoLeaveEmptySpectatorTriggeredRef.current = false;
+      return;
+    }
+    if (presentCount > 0) {
+      autoLeaveEmptySpectatorTriggeredRef.current = false;
+      return;
+    }
+    if (leavingLobby || autoLeaveEmptySpectatorTriggeredRef.current) {
+      return;
+    }
+
+    autoLeaveEmptySpectatorTriggeredRef.current = true;
+    const authToken = token.trim();
+    const uid = userId.trim();
+    const sid = sessionId.trim();
+    if (!authToken || !uid || !sid) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    setLeavingLobby(true);
+    void (async () => {
+      try {
+        let leftSpectatorMembership = false;
+        try {
+          await api.deleteWithAuth(
+            `/lobbies/${encodeURIComponent(sid)}/spectators/${uid}`,
+            authToken,
+          );
+          leftSpectatorMembership = true;
+        } catch (caughtError) {
+          const status = (caughtError as ApplicationError)?.status;
+          if (status !== 404 && status !== 405 && status !== 501) {
+            throw caughtError;
+          }
+        }
+        if (!leftSpectatorMembership) {
+          await api.deleteWithAuth(
+            `/lobbies/${encodeURIComponent(sid)}/players/${uid}`,
+            authToken,
+          );
+        }
+      } catch {
+        // best-effort cleanup only; spectator should still be moved away from ended lobby UI
+      } finally {
+        setSpectatorMode("");
+        router.replace("/dashboard");
+      }
+    })();
+  }, [
+    api,
+    isSpectatorLobbyView,
+    leavingLobby,
+    loading,
+    presentCount,
+    router,
+    sessionId,
+    setSpectatorMode,
+    token,
+    userId,
+  ]);
 
   const handleInvite = (id: number) => {
     if (!userIsHost) {
@@ -1768,7 +1877,9 @@ function WaitingLobbyContent() {
     }
 
     const confirmed = await showTimedConfirmation({
-      title: "Leave this lobby and return to dashboard?",
+      title: isSpectatorLobbyView
+        ? "Leave spectating and return to dashboard?"
+        : "Leave this lobby and return to dashboard?",
       timeoutSeconds: 10,
       danger: true,
     });
@@ -1778,18 +1889,41 @@ function WaitingLobbyContent() {
 
     setLeavingLobby(true);
     try {
-      await api.deleteWithAuth(
-        `/lobbies/${encodeURIComponent(sid)}/players/${uid}`,
-        authToken,
-      );
+      if (isSpectatorLobbyView) {
+        let leftSpectatorMembership = false;
+        try {
+          await api.deleteWithAuth(
+            `/lobbies/${encodeURIComponent(sid)}/spectators/${uid}`,
+            authToken,
+          );
+          leftSpectatorMembership = true;
+        } catch (caughtError) {
+          const status = (caughtError as ApplicationError)?.status;
+          if (status !== 404 && status !== 405 && status !== 501) {
+            throw caughtError;
+          }
+        }
+        if (!leftSpectatorMembership) {
+          await api.deleteWithAuth(
+            `/lobbies/${encodeURIComponent(sid)}/players/${uid}`,
+            authToken,
+          );
+        }
+      } else {
+        await api.deleteWithAuth(
+          `/lobbies/${encodeURIComponent(sid)}/players/${uid}`,
+          authToken,
+        );
+      }
+      setSpectatorMode("");
       router.push("/dashboard");
     } catch (error: unknown) {
       const status = (error as ApplicationError)?.status;
       const detail = error instanceof Error ? error.message.trim() : "";
       alert(
         status
-          ? `Could not leave lobby (HTTP ${status}). ${detail || "Please try again."}`
-          : `Could not leave lobby. ${detail || "Please try again."}`,
+          ? `Could not leave ${isSpectatorLobbyView ? "spectating" : "lobby"} (HTTP ${status}). ${detail || "Please try again."}`
+          : `Could not leave ${isSpectatorLobbyView ? "spectating" : "lobby"}. ${detail || "Please try again."}`,
       );
     } finally {
       setLeavingLobby(false);
@@ -1819,6 +1953,20 @@ function WaitingLobbyContent() {
     );
   }
 
+  if (isSpectatorLobbyView && !loading && sessionId.length > 0 && presentCount === 0) {
+    return (
+      <div className="cabo-background">
+        <div className="login-container waiting-lobby-loading">
+          <Spin size="large" />
+        </div>
+      </div>
+    );
+  }
+
+  const lobbyTitleText = isSpectatorLobbyView
+    ? "Spectator Lobby"
+    : `Lobby ${sessionId || "----"}`;
+
   // fun times below
   return (
     <div className="cabo-background">
@@ -1833,7 +1981,7 @@ function WaitingLobbyContent() {
                   >
                     {isPublicLobby ? "Open" : "Private"}
                   </span>
-                  <span className="lobby-header-title">Lobby</span>
+                  <span className="lobby-header-title">{lobbyTitleText}</span>
                 </span>
                 <span
                   className={`lobby-connection-symbol ${lobbyConnectionIsGreen ? "connected" : "disconnected"}`}
@@ -1846,8 +1994,8 @@ function WaitingLobbyContent() {
             className="dashboard-container lobby-title-card"
           >
             <div className="lobby-intro-copy">
-              <span>Welcome to Lobby {sessionId || "----"}.</span>
-              {userIsHost ? <span>As the host you can invite up to 3 players.</span> : null}
+              <span>{`Welcome to ${lobbyTitleText}.`}</span>
+              {userIsHost && !isSpectatorLobbyView ? <span>As the host you can invite up to 3 players.</span> : null}
               {/*host vs other players see diff things*/}
             </div>
             {showLobbyAfkWarning ? (
@@ -1859,7 +2007,7 @@ function WaitingLobbyContent() {
             ) : null}
           </Card>
 
-          {userIsHost ? ( // host vs other players see diff things
+          {userIsHost && !isSpectatorLobbyView ? ( // host vs other players see diff things
             <Card
               title={
                 <div className="lobby-section-title-row">
@@ -1951,9 +2099,17 @@ function WaitingLobbyContent() {
 
           <Card
             title={
-              <div className="lobby-section-title-row">
-                <span className="lobby-section-title">Players</span>
-                <span className="lobby-section-meta">{presentCount}/4</span>
+              <div className="lobby-players-title-wrap">
+                <div className="lobby-section-title-row">
+                  <span className="lobby-section-title">Players</span>
+                  <span className="lobby-section-meta">{presentCount}/4</span>
+                </div>
+                {spectatorCount > 0 ? (
+                  <div className="lobby-players-title-subline">
+                    <span>Spectators</span>
+                    <span>{spectatorCount}</span>
+                  </div>
+                ) : null}
               </div>
             }
             className="dashboard-container lobby-players-card"
@@ -2083,12 +2239,12 @@ function WaitingLobbyContent() {
             />
           </Card>
           {/* Add a section in the Lobby view to display the names of users currently spectating.#49 */}
-          {spectators.length > 0 && (
+          {isSpectatorLobbyView && spectatorCount > 0 && (
               <Card
                   title={
                       <div className="lobby-section-title-row">
-                          <span className="lobby-section-title">👁️ Spectators</span>
-                          <span className="lobby-section-meta">{spectators.length}</span>
+                          <span className="lobby-section-title">Spectators</span>
+                          <span className="lobby-section-meta">{spectatorCount}</span>
                       </div>
                   }
                   className="dashboard-container"
@@ -2169,26 +2325,28 @@ function WaitingLobbyContent() {
               </Card>
 	          )}
 
-	          <Card
-	            title={
-	              <div className="lobby-section-title-row">
-	                <span className="lobby-section-title">Chat</span>
-	              </div>
-	            }
-	            className="dashboard-container"
-	          >
-	            <div className="create-lobby-actions lobby-chat-panel-wrap">
-	              <CaboChatPanel
-	                sessionId={sessionId}
-	                token={token}
-	                userId={userId}
-	                cooldownSeconds={lobbyTimerSettings.chatCooldownSeconds}
-	                variant="lobby"
-	              />
-	            </div>
-	          </Card>
+          {!isSpectatorLobbyView ? (
+            <Card
+              title={
+                <div className="lobby-section-title-row">
+                  <span className="lobby-section-title">Chat</span>
+                </div>
+              }
+              className="dashboard-container"
+            >
+              <div className="create-lobby-actions lobby-chat-panel-wrap">
+                <CaboChatPanel
+                  sessionId={sessionId}
+                  token={token}
+                  userId={userId}
+                  cooldownSeconds={lobbyTimerSettings.chatCooldownSeconds}
+                  variant="lobby"
+                />
+              </div>
+            </Card>
+          ) : null}
 
-	          {userIsHost ? ( //host vs other players see diff things
+	          {userIsHost && !isSpectatorLobbyView ? ( //host vs other players see diff things
 	            <Card
               title={
                 <div className="lobby-section-title-row">
@@ -2420,7 +2578,7 @@ function WaitingLobbyContent() {
                           scheduleLobbyTimerSettingUpdate("absentRoundPoints", clamped);
                         }}
                       />
-                      <span className="lobby-setting-row-value">{lobbyTimerSettings.absentRoundPoints}</span>
+                      <span className="lobby-setting-row-value">{lobbyTimerSettings.absentRoundPoints}pts</span>
                     </div>
                   </div>
                   <div className="lobby-setting-row">
@@ -2468,19 +2626,29 @@ function WaitingLobbyContent() {
             >
               <div className="create-lobby-actions">
                 <div className="lobby-settings-list">
-                  <div className="lobby-setting-row lobby-setting-row-toggle">
-                    <span className="lobby-setting-row-label">Share Move History</span>
-                    <div className="lobby-setting-row-control lobby-setting-row-control-toggle">
-                      <Switch
-                        className="lobby-private-switch"
-                        checked={moveHistoryPublic}
-                        loading={updatingMoveHistoryPublic}
-                        onChange={handleMoveHistoryVisibilityToggle}
-                        checkedChildren="Yes"
-                        unCheckedChildren="No"
-                      />
+                  {!isSpectatorLobbyView ? (
+                    <div className="lobby-setting-row lobby-setting-row-toggle">
+                      <span className="lobby-setting-row-label">Share Move History</span>
+                      <div className="lobby-setting-row-control lobby-setting-row-control-toggle">
+                        <Switch
+                          className="lobby-private-switch"
+                          checked={moveHistoryPublic}
+                          loading={updatingMoveHistoryPublic}
+                          onChange={handleMoveHistoryVisibilityToggle}
+                          checkedChildren="Yes"
+                          unCheckedChildren="No"
+                        />
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
+                  {readonlyLobbySettingsRows.map((row) => (
+                    <div key={row.label} className="lobby-setting-row">
+                      <span className="lobby-setting-row-label">{row.label}</span>
+                      <div className="lobby-setting-row-control lobby-setting-row-control-readonly">
+                        <span className="lobby-setting-row-value">{row.value}</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </Card>
@@ -2488,31 +2656,33 @@ function WaitingLobbyContent() {
 
           <Card className="dashboard-container">
             <div className="create-lobby-actions">
-              {userIsHost ? ( //host vs other players see diff things
-                <Button
-                  type="primary"
-                  className="create-lobby-start-game-btn"
-                  disabled={presentCount < 2 || !allNonHostPlayersReady || startingGame}
-                  loading={startingGame}
-                  onClick={() => void handleStartGame()}
-                >
-                  Start Game
-                </Button>
-              ) : (
-                <Button
-                  type="default"
-                  className={`create-lobby-start-game-btn lobby-viewer-ready-main-btn${!viewerReadyKey ? " lobby-viewer-ready-main-btn-not-ready" : viewerIsReady ? " lobby-viewer-ready-main-btn-no-longer-ready" : " lobby-viewer-ready-main-btn-ready-up"}`}
-                  disabled={!viewerReadyKey || togglingReady}
-                  loading={togglingReady}
-                  onClick={handleViewerReadyToggle}
-                >
-                  {!viewerReadyKey
-                    ? "Not Ready"
-                    : viewerIsReady
-                      ? "No Longer Ready"
-                      : "Ready Up"}
-                </Button>
-              )}
+              {!isSpectatorLobbyView
+                ? (userIsHost ? ( //host vs other players see diff things
+                  <Button
+                    type="primary"
+                    className="create-lobby-start-game-btn"
+                    disabled={presentCount < 2 || !allNonHostPlayersReady || startingGame}
+                    loading={startingGame}
+                    onClick={() => void handleStartGame()}
+                  >
+                    Start Game
+                  </Button>
+                ) : (
+                  <Button
+                    type="default"
+                    className={`create-lobby-start-game-btn lobby-viewer-ready-main-btn${!viewerReadyKey ? " lobby-viewer-ready-main-btn-not-ready" : viewerIsReady ? " lobby-viewer-ready-main-btn-no-longer-ready" : " lobby-viewer-ready-main-btn-ready-up"}`}
+                    disabled={!viewerReadyKey || togglingReady}
+                    loading={togglingReady}
+                    onClick={handleViewerReadyToggle}
+                  >
+                    {!viewerReadyKey
+                      ? "Not Ready"
+                      : viewerIsReady
+                        ? "No Longer Ready"
+                        : "Ready Up"}
+                  </Button>
+                ))
+                : null}
               <Button
                 type="primary"
                 className="lobby-leave-btn"
@@ -2520,7 +2690,7 @@ function WaitingLobbyContent() {
                 loading={leavingLobby}
                 onClick={() => void handleLeaveLobby()}
               >
-                Leave Lobby
+                {isSpectatorLobbyView ? "Leave Spectating" : "Leave Lobby"}
               </Button>
             </div>
           </Card>

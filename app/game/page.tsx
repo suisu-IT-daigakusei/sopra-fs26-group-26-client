@@ -509,13 +509,8 @@ function normalizeSeatCards(cards: CardViewSignal[] | null | undefined): SeatCar
 }
 
 function getAfkWarningLeadSeconds(afkTimeoutSeconds: number): number {
-    if (afkTimeoutSeconds <= 300) {
-        return 60;
-    }
-    if (afkTimeoutSeconds <= 600) {
-        return 180;
-    }
-    return 300;
+    void afkTimeoutSeconds;
+    return 60;
 }
 
 function extractPlayerCardsById(value: unknown): Record<number, SeatCardView[]> {
@@ -1104,10 +1099,12 @@ const Game = () => {
   const { value: activeSessionId, set: setActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
   const { value: activeLobbySessionId, set: setActiveLobbySessionId } =
       useLocalStorage<string>("activeLobbySessionId", "");
+  const { value: spectatorMode, set: setSpectatorMode } = useLocalStorage<string>("spectatorMode", "");
   const { value: activeGameStatusSnapshot, set: setActiveGameStatusSnapshot } =
       useLocalStorage<ActiveGameStatusSnapshot | null>("activeGameStatusSnapshot", null);
   const gameId = activeSessionId.trim();
   const lobbySessionId = activeLobbySessionId.trim();
+  const isSpectatorMode = spectatorMode.trim() === "1";
   const { value: token } = useLocalStorage<string>("token", "");
   const HAND_SIZE = 4; // referencing here, keeps it consistent and less prone to errors
   const HOW_TO_PLAY_PANEL_DEFAULT_WIDTH = 360;
@@ -1274,6 +1271,7 @@ const Game = () => {
       const [currentTurnUserId, setCurrentTurnUserId] = useState<number | null>(null);
       const [turnTimeLeftMs, setTurnTimeLeftMs] = useState<number>(DEFAULT_TURN_SECONDS * 1000);
       const [isCallingCabo, setIsCallingCabo] = useState<boolean>(false);
+      const [isLeavingSpectating, setIsLeavingSpectating] = useState<boolean>(false);
       const [isSubmittingRematchDecision, setIsSubmittingRematchDecision] = useState<boolean>(false);
       const [caboRevealCountdown, setCaboRevealCountdown] = useState<number>(0);
       const [caboRevealElapsedMs, setCaboRevealElapsedMs] = useState<number>(0);
@@ -1575,16 +1573,34 @@ const Game = () => {
           });
       }, [activeGameStatusSnapshot, gameId, gameStatus, setActiveGameStatusSnapshot]);
 
-      const tablePlayerIds = useMemo(() => {
-          const unique = Array.from(new Set(orderedPlayerIds));
-          if (selfUserId != null && !unique.includes(selfUserId)) {
-              unique.push(selfUserId);
+      const gamePlayerIds = useMemo(() => {
+          const unique = Array.from(new Set(orderedPlayerIds.filter((id) => Number.isFinite(id))));
+          if (isSpectatorMode && selfUserId != null) {
+              return unique.filter((id) => id !== selfUserId);
           }
           return unique;
-      }, [orderedPlayerIds, selfUserId]);
+      }, [isSpectatorMode, orderedPlayerIds, selfUserId]);
+
+      const viewerSeatPlayerId = useMemo(() => {
+          if (isSpectatorMode) {
+              return gamePlayerIds[0] ?? null;
+          }
+          if (selfUserId != null) {
+              return selfUserId;
+          }
+          return gamePlayerIds[0] ?? null;
+      }, [gamePlayerIds, isSpectatorMode, selfUserId]);
+
+      const tablePlayerIds = useMemo(() => {
+          const unique = [...gamePlayerIds];
+          if (!isSpectatorMode && viewerSeatPlayerId != null && !unique.includes(viewerSeatPlayerId)) {
+              unique.push(viewerSeatPlayerId);
+          }
+          return unique;
+      }, [gamePlayerIds, isSpectatorMode, viewerSeatPlayerId]);
 
       const seatAssignments = useMemo(() => {
-          if (selfUserId == null || tablePlayerIds.length === 0) {
+          if (viewerSeatPlayerId == null || tablePlayerIds.length === 0) {
               return {
                   topOpponentId: null as number | null,
                   leftOpponentId: null as number | null,
@@ -1592,9 +1608,9 @@ const Game = () => {
               };
           }
 
-          const selfIndex = tablePlayerIds.indexOf(selfUserId);
+          const selfIndex = tablePlayerIds.indexOf(viewerSeatPlayerId);
           if (selfIndex < 0) {
-              const fallbackOpponents = tablePlayerIds.filter((id) => id !== selfUserId);
+              const fallbackOpponents = tablePlayerIds.filter((id) => id !== viewerSeatPlayerId);
               return {
                   topOpponentId: fallbackOpponents[0] ?? null,
                   leftOpponentId: fallbackOpponents[1] ?? null,
@@ -1633,7 +1649,7 @@ const Game = () => {
               topOpponentId: clockwiseOpponents[1] ?? null,
               rightOpponentId: clockwiseOpponents[2] ?? null,
           };
-      }, [selfUserId, tablePlayerIds]);
+      }, [viewerSeatPlayerId, tablePlayerIds]);
 
       const topSeatCards = useMemo(() => {
           if (seatAssignments.topOpponentId == null) {
@@ -1685,6 +1701,23 @@ const Game = () => {
               cardsBySlot.get(index) ?? { position: index, faceDown: true, value: undefined }
           ));
       }, [seatAssignments.rightOpponentId, playerCardsById, HAND_SIZE]);
+
+      const bottomSeatCardsForSpectator = useMemo(() => {
+          if (!isSpectatorMode || viewerSeatPlayerId == null) {
+              return [];
+          }
+          const sourceCards = playerCardsById[viewerSeatPlayerId] ?? [];
+          const cardsBySlot = new Map<number, SeatCardView>();
+          sourceCards.forEach((card) => {
+              const normalizedSlot = normalizeHandSlotIndex(card.position, HAND_SIZE);
+              if (normalizedSlot != null) {
+                  cardsBySlot.set(normalizedSlot, card);
+              }
+          });
+          return Array.from({ length: HAND_SIZE }, (_, index) => (
+              cardsBySlot.get(index) ?? { position: index, faceDown: true, value: undefined }
+          ));
+      }, [HAND_SIZE, isSpectatorMode, playerCardsById, viewerSeatPlayerId]);
 
       const topSeatDisplayCards = useMemo(
           () => [...topSeatCards].reverse(),
@@ -1858,7 +1891,7 @@ const Game = () => {
       };
 
       const submitInitialPeekSelection = async (indices: number[]) => {
-          if (!gameId || !token || !userId) {
+          if (isSpectatorMode || !gameId || !token || !userId) {
               return;
           }
 
@@ -1887,7 +1920,7 @@ const Game = () => {
       };
 
       const handlePeekCardClick = (cardIndex: number) => {
-          if (!isPeekPhase || isSubmittingInitialPeek) {
+          if (isSpectatorMode || !isPeekPhase || isSubmittingInitialPeek) {
               return;
           }
 
@@ -2447,9 +2480,9 @@ const Game = () => {
               throw error;
           }
 
-          const fallbackPlayerIds = tablePlayerIds.length > 0
-              ? tablePlayerIds
-              : (selfUserId != null ? [selfUserId] : []);
+          const fallbackPlayerIds = gamePlayerIds.length > 0
+              ? gamePlayerIds
+              : (!isSpectatorMode && selfUserId != null ? [selfUserId] : []);
           const sessionSnapshot = buildSessionHistoryScoresSnapshot(
               scorePayload,
               sessionCode,
@@ -2485,11 +2518,12 @@ const Game = () => {
           }
       }, [
           apiService,
+          gamePlayerIds,
+          isSpectatorMode,
           lobbySessionId,
           playerNamesById,
           selfUserId,
           setActiveLobbySessionId,
-          tablePlayerIds,
           token,
       ]);
 
@@ -2646,9 +2680,13 @@ const Game = () => {
           if (!isAwaitingRematchDecision) return;
 
           setFinalScores((previous) => {
-              const previousById = new Map(previous.map((entry) => [entry.userId, entry] as const));
-              const combinedIds: number[] = [...tablePlayerIds];
-              previous.forEach((entry) => {
+              const participantIds = [...gamePlayerIds];
+              const previousParticipantScores = participantIds.length > 0
+                  ? previous.filter((entry) => participantIds.includes(entry.userId))
+                  : previous;
+              const previousById = new Map(previousParticipantScores.map((entry) => [entry.userId, entry] as const));
+              const combinedIds: number[] = [...participantIds];
+              previousParticipantScores.forEach((entry) => {
                   if (!combinedIds.includes(entry.userId)) {
                       combinedIds.push(entry.userId);
                   }
@@ -2671,7 +2709,7 @@ const Game = () => {
                   };
               });
           });
-      }, [isAwaitingRematchDecision, tablePlayerIds, playerNamesById]);
+      }, [gamePlayerIds, isAwaitingRematchDecision, playerNamesById]);
 
       useEffect(() => {
           if (!isAwaitingRematchDecision) {
@@ -2767,6 +2805,7 @@ const Game = () => {
 
           let active = true;
           const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+          const spectatorQuerySuffix = isSpectatorMode ? "?spectator=1" : "";
           const navigateAfterRound = async () => {
               // Rematch lobby assignment can be slightly delayed after ROUND_ENDED.
               // Retry briefly before falling back to dashboard.
@@ -2783,7 +2822,7 @@ const Game = () => {
                       if (waitingSessionId) {
                           setActiveLobbySessionId(waitingSessionId);
                           setActiveSessionId(waitingSessionId);
-                          router.replace(`/lobby/${encodeURIComponent(waitingSessionId)}`);
+                          router.replace(`/lobby/${encodeURIComponent(waitingSessionId)}${spectatorQuerySuffix}`);
                           return;
                       }
                   } catch {
@@ -2802,7 +2841,7 @@ const Game = () => {
                       if (myWaitingSessionId) {
                           setActiveLobbySessionId(myWaitingSessionId);
                           setActiveSessionId(myWaitingSessionId);
-                          router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}`);
+                          router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}${spectatorQuerySuffix}`);
                           return;
                       }
                   } catch {
@@ -2823,7 +2862,7 @@ const Game = () => {
           return () => {
               active = false;
           };
-      }, [apiService, gameStatus, gameId, token, router, setActiveLobbySessionId, setActiveSessionId]);
+      }, [apiService, gameStatus, gameId, isSpectatorMode, token, router, setActiveLobbySessionId, setActiveSessionId]);
 
       const isPeekOrSpyPhaseForCountdown =
           gameStatus === "ability_peek_self" ||
@@ -2845,6 +2884,7 @@ const Game = () => {
       const isMyTurnUi = isCurrentTurnMine && !isPeekPhase && !isPostRoundPhase;
       const afkWarningLeadSeconds = getAfkWarningLeadSeconds(afkTimeoutSeconds);
       const showAfkWarning =
+          !isSpectatorMode &&
           !isPostRoundPhase &&
           gameStatus !== "round_ended" &&
           afkRemainingSeconds <= afkWarningLeadSeconds;
@@ -3365,7 +3405,10 @@ useEffect(() => {
 
         const candidateIds = Array.from(
             new Set(
-                [...tablePlayerIdsRef.current, selfUserId].filter((id) => Number.isFinite(id))
+                [
+                    ...tablePlayerIdsRef.current,
+                    ...(!isSpectatorMode ? [selfUserId] : []),
+                ].filter((id) => Number.isFinite(id))
             )
         );
         if (candidateIds.length === 0) {
@@ -3499,6 +3542,7 @@ useEffect(() => {
     isAbilityPending,
     isUseAbilitySelected,
     isAbilityChoicePending,
+    isSpectatorMode,
 ]);
 
 useEffect(() => {
@@ -4070,11 +4114,89 @@ const callCabo = async () => {
     });
 };
 
+const handleLeaveSpectating = async () => {
+    if (!isSpectatorMode || isLeavingSpectating) {
+        return;
+    }
+    const authToken = token.trim();
+    const spectatorUserId = userId.trim();
+    const sid = lobbySessionId.trim();
+    if (!authToken || !spectatorUserId || !sid) {
+        return;
+    }
+
+    const confirmed = await showTimedConfirmation({
+        title: "Leave spectating and return to dashboard?",
+        timeoutSeconds: 10,
+        danger: true,
+    });
+    if (!confirmed) {
+        return;
+    }
+
+    setIsLeavingSpectating(true);
+    try {
+        let leftSpectatorMembership = false;
+        try {
+            await apiService.deleteWithAuth(
+                `/lobbies/${encodeURIComponent(sid)}/spectators/${spectatorUserId}`,
+                authToken,
+            );
+            leftSpectatorMembership = true;
+        } catch (caughtError) {
+            const status = (caughtError as ApplicationError)?.status;
+            if (status !== 404 && status !== 405 && status !== 501) {
+                throw caughtError;
+            }
+        }
+
+        if (!leftSpectatorMembership) {
+            await apiService.deleteWithAuth(
+                `/lobbies/${encodeURIComponent(sid)}/players/${spectatorUserId}`,
+                authToken,
+            );
+        }
+
+        setSpectatorMode("");
+        setActiveSessionId("");
+        setActiveLobbySessionId("");
+        router.replace("/dashboard");
+    } catch (error) {
+        console.error("Failed to leave spectating:", error);
+        alert("Could not leave spectating. Please try again.");
+    } finally {
+        setIsLeavingSpectating(false);
+    }
+};
+
 // #36/#42: Scores
 const [isScoresOpen, setIsScoresOpen] = useState<boolean>(false);
+const scoreParticipantIdSet = useMemo(() => {
+    if (gamePlayerIds.length > 0) {
+        return new Set(gamePlayerIds);
+    }
+
+    const cardOwnerIds = Object.keys(playerCardsById)
+        .map((key) => Number(key))
+        .filter((id) => Number.isFinite(id) && (!isSpectatorMode || selfUserId == null || id !== selfUserId));
+    if (cardOwnerIds.length > 0) {
+        return new Set(cardOwnerIds);
+    }
+
+    return new Set<number>();
+}, [gamePlayerIds, isSpectatorMode, playerCardsById, selfUserId]);
+const participantFinalScores = useMemo(() => {
+    const filtered = scoreParticipantIdSet.size === 0
+        ? finalScores
+        : finalScores.filter((entry) => scoreParticipantIdSet.has(entry.userId));
+    if (!isSpectatorMode || selfUserId == null) {
+        return filtered;
+    }
+    return filtered.filter((entry) => entry.userId !== selfUserId);
+}, [finalScores, isSpectatorMode, scoreParticipantIdSet, selfUserId]);
 
 const scoreModalPlayers = useMemo(() => {
-    if (finalScores.length === 0) {
+    if (participantFinalScores.length === 0) {
         return tablePlayerIds.map((id) => ({
             userId: id,
             username: playerNamesById[id] ?? `Player ${id}`,
@@ -4083,9 +4205,9 @@ const scoreModalPlayers = useMemo(() => {
         }));
     }
 
-    const byId = new Map(finalScores.map((entry) => [entry.userId, entry] as const));
+    const byId = new Map(participantFinalScores.map((entry) => [entry.userId, entry] as const));
     const ids = [...tablePlayerIds];
-    finalScores.forEach((entry) => {
+    participantFinalScores.forEach((entry) => {
         if (!ids.includes(entry.userId)) {
             ids.push(entry.userId);
         }
@@ -4106,12 +4228,12 @@ const scoreModalPlayers = useMemo(() => {
             roundScores: [] as Array<number | null>,
         };
     });
-}, [finalScores, tablePlayerIds, playerNamesById]);
+}, [participantFinalScores, playerNamesById, tablePlayerIds]);
 
 const canonicalCaboRevealOrderIds = useMemo(() => {
     const serverOrderedIds = Array.from(
         new Set(
-            orderedPlayerIds.filter((id) => Number.isFinite(id))
+            gamePlayerIds.filter((id) => Number.isFinite(id))
         )
     );
     if (serverOrderedIds.length > 0) {
@@ -4123,18 +4245,18 @@ const canonicalCaboRevealOrderIds = useMemo(() => {
         .map((key) => Number(key))
         .filter((id) => Number.isFinite(id))
         .forEach((id) => fallbackIds.add(id));
-    finalScores.forEach((entry) => fallbackIds.add(entry.userId));
+    participantFinalScores.forEach((entry) => fallbackIds.add(entry.userId));
     tablePlayerIds
         .filter((id) => Number.isFinite(id))
         .forEach((id) => fallbackIds.add(id));
 
     return Array.from(fallbackIds).sort((a, b) => a - b);
-}, [orderedPlayerIds, playerCardsById, finalScores, tablePlayerIds]);
+}, [gamePlayerIds, participantFinalScores, playerCardsById, tablePlayerIds]);
 
 const introPhasePlayers = useMemo(() => {
     const scoreByUserId = new Map<number, number | null>();
     const snapshotNameByUserId = new Map<number, string>();
-    finalScores.forEach((entry) => {
+    participantFinalScores.forEach((entry) => {
         const parsedScore = Number(entry.totalScore);
         scoreByUserId.set(entry.userId, Number.isFinite(parsedScore) ? Math.trunc(parsedScore) : null);
         const snapshotName = String(entry.username ?? "").trim();
@@ -4144,7 +4266,7 @@ const introPhasePlayers = useMemo(() => {
     });
 
       const combinedIds = [...tablePlayerIds];
-      finalScores.forEach((entry) => {
+      participantFinalScores.forEach((entry) => {
           if (!combinedIds.includes(entry.userId)) {
               combinedIds.push(entry.userId);
           }
@@ -4162,7 +4284,7 @@ const introPhasePlayers = useMemo(() => {
               scoreText: formatPointsLabel(resolvedScore),
           };
       });
-  }, [finalScores, tablePlayerIds, playerNamesById]);
+  }, [participantFinalScores, playerNamesById, tablePlayerIds]);
 
 const INTRO_TITLE_DURATION_MS = 2000;
 const INTRO_PLAYER_REVEAL_INTERVAL_MS = 2000;
@@ -4192,7 +4314,7 @@ const visibleIntroPlayers = useMemo(
 );
 
 const introRoundNumber = useMemo(() => {
-    const roundsFromScores = finalScores.reduce((maxRounds, player) => {
+    const roundsFromScores = participantFinalScores.reduce((maxRounds, player) => {
         const playerRoundCount = Array.isArray(player.roundScores) ? player.roundScores.length : 0;
         return Math.max(maxRounds, playerRoundCount);
     }, 0);
@@ -4200,10 +4322,10 @@ const introRoundNumber = useMemo(() => {
     const roundsFromState = Number.isFinite(parsedTotalRounds) ? Math.max(0, Math.trunc(parsedTotalRounds)) : 0;
     const completedRounds = Math.max(roundsFromScores, roundsFromState);
     return completedRounds + 1;
-}, [finalScoreTotalRounds, finalScores]);
+}, [finalScoreTotalRounds, participantFinalScores]);
 
 const caboRevealPlayers = useMemo(() => {
-    const byFinalScoreId = new Map(finalScores.map((entry) => [entry.userId, entry] as const));
+    const byFinalScoreId = new Map(participantFinalScores.map((entry) => [entry.userId, entry] as const));
     const orderedIds = [...canonicalCaboRevealOrderIds];
 
     const appendMissingId = (id: number) => {
@@ -4218,7 +4340,7 @@ const caboRevealPlayers = useMemo(() => {
         .sort((a, b) => a - b)
         .forEach(appendMissingId);
 
-    finalScores.forEach((entry) => {
+    participantFinalScores.forEach((entry) => {
         appendMissingId(entry.userId);
     });
 
@@ -4281,7 +4403,7 @@ const caboRevealPlayers = useMemo(() => {
             isSpecialWin: scoreEntry?.isSpecialWin === true,
         };
     });
-}, [HAND_SIZE, canonicalCaboRevealOrderIds, finalScores, playerCardsById, playerNamesById]);
+}, [HAND_SIZE, canonicalCaboRevealOrderIds, participantFinalScores, playerCardsById, playerNamesById]);
 
 const caboRevealWinner = useMemo(() => {
     if (caboRevealPlayers.length === 0) {
@@ -4922,7 +5044,9 @@ if (isCaboRevealPhase) {
 }
 
 const playerListRows = tablePlayerIds.map((id) => {
-          const fallbackLabel = selfUserId != null && id === selfUserId ? "You" : `Player ${id}`;
+          const fallbackLabel = !isSpectatorMode && selfUserId != null && id === selfUserId
+              ? "You"
+              : `Player ${id}`;
           const label = playerNamesById[id] ?? fallbackLabel;
           const isActive = !isPeekPhase && currentTurnUserId != null && currentTurnUserId === id;
           const isTimedOut = timedOutPlayerIds.includes(id);
@@ -4933,6 +5057,10 @@ const playerListRows = tablePlayerIds.map((id) => {
               isTimedOut,
           };
       });
+
+      const spectatorBottomPlayerLabel = isSpectatorMode && viewerSeatPlayerId != null
+          ? (playerNamesById[viewerSeatPlayerId] ?? `Player ${viewerSeatPlayerId}`)
+          : "";
 
       const showResyncOverlay =
           !socketSynced &&
@@ -5040,16 +5168,19 @@ const playerListRows = tablePlayerIds.map((id) => {
                                       <Button onClick={() => void handleShowScores()}>Scores</Button>
                                       <Button
                                           type="primary"
-                                          className={`game-call-cabo-btn${isCaboCalledGlobal ? " game-cabo-called-btn" : ""}`}
-                                          disabled={!canCallCabo}
-                                          loading={isCallingCabo}
-                                          onClick={() => void callCabo()}
+                                          className={`game-call-cabo-btn${!isSpectatorMode && isCaboCalledGlobal ? " game-cabo-called-btn" : ""}`}
+                                          danger={!isSpectatorMode && isCaboCalledGlobal}
+                                          disabled={isSpectatorMode ? isLeavingSpectating : !canCallCabo}
+                                          loading={isSpectatorMode ? isLeavingSpectating : isCallingCabo}
+                                          onClick={() => void (isSpectatorMode ? handleLeaveSpectating() : callCabo())}
                                       >
-                                          {isCaboCalledGlobal
-                                              ? (isCaboForcedByTimeoutGlobal
-                                                  ? "Cabo Called (AFK/DC) - Final Round!"
-                                                  : "Cabo Called - Final Round!")
-                                              : "Call Cabo"}
+                                          {isSpectatorMode
+                                              ? "Leave Spectating"
+                                              : (isCaboCalledGlobal
+                                                  ? (isCaboForcedByTimeoutGlobal
+                                                      ? "Cabo Called (AFK/DC) - Final Round!"
+                                                      : "Cabo Called - Final Round!")
+                                                  : "Call Cabo")}
                                       </Button>
                                   </div>
                               </section>
@@ -5120,6 +5251,10 @@ const playerListRows = tablePlayerIds.map((id) => {
                                                       }`}
                                                   >
                                                       Cabo Called - Final Round!
+                                                  </p>
+                                              ) : isPeekPhase && isSpectatorMode ? (
+                                                  <p className="game-center-notification game-center-notification-span game-center-notification-spectator-peek">
+                                                      Players are currently peeking 2 cards.
                                                   </p>
                                               ) : (
                                                   <p className="game-center-notification game-center-notification-placeholder game-center-notification-span" aria-hidden="true">
@@ -5316,114 +5451,146 @@ const playerListRows = tablePlayerIds.map((id) => {
                               </section>
 
                               <section className="game-layout-zone game-table-cell game-table-cell-bottom-left" aria-label="Chat">
-                                  <div className="game-chat-zone-card">
-                                      <CaboChatPanel
-                                          sessionId={lobbySessionId}
-                                          token={token}
-                                          userId={userId}
-                                          cooldownSeconds={chatCooldownSeconds}
-                                          variant="game"
-                                          className="game-corner-chat-panel"
-                                      />
-                                  </div>
+                                  {!isSpectatorMode ? (
+                                      <div className="game-chat-zone-card">
+                                          <CaboChatPanel
+                                              sessionId={lobbySessionId}
+                                              token={token}
+                                              userId={userId}
+                                              cooldownSeconds={chatCooldownSeconds}
+                                              variant="game"
+                                              className="game-corner-chat-panel"
+                                          />
+                                      </div>
+                                  ) : null}
                               </section>
 
-                              <section className="game-table-cell game-table-cell-bottom-center" aria-label="Your cards">
-                                  <div className={`bottom-cards${isMyTurnUi ? " game-current-player-highlight" : ""}`}>
-                                      {[...Array(HAND_SIZE)].map((_, i) => {
-                                          const card = myHand[i];
-                                          const isSelectedForSwap = abilitySelectedOwnCardIndex === i;
-                                          const isSwapChoosingOwnCard =
-                                              gameStatus === "ability_swap" && abilitySelectedOwnCardIndex == null;
-                                          const canClickOwnCardForAbility =
-                                              canInteractWithAbilityTargets && (
-                                                  gameStatus === "ability_peek_self" ||
-                                                  isSwapChoosingOwnCard
-                                              );
-                                          const isHighlightedForAbility =
-                                              canClickOwnCardForAbility ||
-                                              (canInteractWithAbilityTargets && gameStatus === "ability_swap" && isSelectedForSwap);
-                                          const isPeekCardSelected = isPeekPhase && peekVisibleCards[i];
-                                          const isPeekCardSelectable =
-                                              isPeekPhase &&
-                                              !isSubmittingInitialPeek &&
-                                              !isPeekCardSelected &&
-                                              revealedPeekCount < 2;
-                                          const isSwapDropTarget =
-                                              (isDraggingTurnCard || isDraggingDiscardPileSwapCard) &&
-                                              (canSwapDrawnCardWithHand || canDrawFromDiscardPile) &&
-                                              dragOverOwnCardIndex === i;
+                              <section
+                                  className="game-table-cell game-table-cell-bottom-center"
+                                  aria-label={isSpectatorMode ? "Bottom player cards" : "Your cards"}
+                              >
+                                  <div className="game-bottom-seat-stack">
+                                      {isSpectatorMode && spectatorBottomPlayerLabel ? (
+                                          <div className="game-opponent-seat-name game-spectator-bottom-seat-name" title={spectatorBottomPlayerLabel}>
+                                              {spectatorBottomPlayerLabel}
+                                          </div>
+                                      ) : null}
+                                      <div className={`bottom-cards${isMyTurnUi ? " game-current-player-highlight" : ""}`}>
+                                          {[...Array(HAND_SIZE)].map((_, i) => {
+                                              if (isSpectatorMode) {
+                                                  const card = bottomSeatCardsForSpectator[i];
+                                                  return (
+                                                      <div
+                                                          key={`spectator-bottom-${i}`}
+                                                          ref={(element) => {
+                                                              ownHandCardRefs.current[i] = element;
+                                                          }}
+                                                          className="game-own-card-anchor"
+                                                      >
+                                                          <CardComponent
+                                                              hidden={isPostRoundPhase ? false : (card?.faceDown ?? true)}
+                                                              value={card?.value}
+                                                              size="large"
+                                                              disabled
+                                                          />
+                                                      </div>
+                                                  );
+                                              }
 
-                                          const cardStyle: React.CSSProperties | undefined = isPeekPhase
-                                              ? (isPeekCardSelected ? {
-                                                  outline: "3px solid #e8a87c",
-                                                  outlineOffset: "2px",
-                                                  boxShadow: "0 0 0 2px rgba(232, 168, 124, 0.35)",
-                                              } : isPeekCardSelectable ? {
-                                                  outline: "3px dashed rgba(52, 226, 122, 0.95)",
-                                                  outlineOffset: "2px",
-                                                  boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
-                                              } : {
-                                                  outline: "2px solid rgba(255, 255, 255, 0.75)",
-                                                  outlineOffset: "2px",
-                                              })
-                                              : isHighlightedForAbility ? {
-                                                  outline: (gameStatus === "ability_swap" && isSelectedForSwap)
-                                                      ? "3px solid #e8a87c"
-                                                      : "3px solid #a8b87a",
-                                                  outlineOffset: "2px",
-                                              } : shouldHighlightOwnCardsForTurnSwap ? {
-                                                  outline: "3px solid #34e27a",
-                                                  outlineOffset: "2px",
-                                                  boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.25)",
-                                              } : undefined;
-                                          const finalCardStyle: React.CSSProperties | undefined = isSwapDropTarget ? {
-                                              ...(cardStyle ?? {}),
-                                              outline: "3px dashed #ffb14a",
-                                              outlineOffset: "2px",
-                                              boxShadow: "0 0 0 2px rgba(255, 177, 74, 0.48), 0 0 14px rgba(255, 177, 74, 0.72)",
-                                          } : cardStyle;
+                                              const card = myHand[i];
+                                              const isSelectedForSwap = abilitySelectedOwnCardIndex === i;
+                                              const isSwapChoosingOwnCard =
+                                                  gameStatus === "ability_swap" && abilitySelectedOwnCardIndex == null;
+                                              const canClickOwnCardForAbility =
+                                                  canInteractWithAbilityTargets && (
+                                                      gameStatus === "ability_peek_self" ||
+                                                      isSwapChoosingOwnCard
+                                                  );
+                                              const isHighlightedForAbility =
+                                                  canClickOwnCardForAbility ||
+                                                  (canInteractWithAbilityTargets && gameStatus === "ability_swap" && isSelectedForSwap);
+                                              const isPeekCardSelected = isPeekPhase && peekVisibleCards[i];
+                                              const isPeekCardSelectable =
+                                                  isPeekPhase &&
+                                                  !isSubmittingInitialPeek &&
+                                                  !isPeekCardSelected &&
+                                                  revealedPeekCount < 2;
+                                              const isSwapDropTarget =
+                                                  (isDraggingTurnCard || isDraggingDiscardPileSwapCard) &&
+                                                  (canSwapDrawnCardWithHand || canDrawFromDiscardPile) &&
+                                                  dragOverOwnCardIndex === i;
 
-                                          return (
-                                              <div
-                                                  key={i}
-                                                  ref={(element) => {
-                                                      ownHandCardRefs.current[i] = element;
-                                                  }}
-                                                  className="game-own-card-anchor"
-                                              >
-                                                  <CardComponent
-                                                      hidden={isPostRoundPhase ? false : !peekVisibleCards[i]}
-                                                      value={card?.value}
-                                                      size="large"
-                                                      onClick={() => {
-                                                          if (isPeekPhase) {
-                                                              handlePeekCardClick(i);
-                                                              return;
-                                                          }
+                                              const cardStyle: React.CSSProperties | undefined = isPeekPhase
+                                                  ? (isPeekCardSelected ? {
+                                                      outline: "3px solid #e8a87c",
+                                                      outlineOffset: "2px",
+                                                      boxShadow: "0 0 0 2px rgba(232, 168, 124, 0.35)",
+                                                  } : isPeekCardSelectable ? {
+                                                      outline: "3px dashed rgba(52, 226, 122, 0.95)",
+                                                      outlineOffset: "2px",
+                                                      boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.3)",
+                                                  } : {
+                                                      outline: "2px solid rgba(255, 255, 255, 0.75)",
+                                                      outlineOffset: "2px",
+                                                  })
+                                                  : isHighlightedForAbility ? {
+                                                      outline: (gameStatus === "ability_swap" && isSelectedForSwap)
+                                                          ? "3px solid #e8a87c"
+                                                          : "3px solid #a8b87a",
+                                                      outlineOffset: "2px",
+                                                  } : shouldHighlightOwnCardsForTurnSwap ? {
+                                                      outline: "3px solid #34e27a",
+                                                      outlineOffset: "2px",
+                                                      boxShadow: "0 0 0 2px rgba(52, 226, 122, 0.25)",
+                                                  } : undefined;
+                                              const finalCardStyle: React.CSSProperties | undefined = isSwapDropTarget ? {
+                                                  ...(cardStyle ?? {}),
+                                                  outline: "3px dashed #ffb14a",
+                                                  outlineOffset: "2px",
+                                                  boxShadow: "0 0 0 2px rgba(255, 177, 74, 0.48), 0 0 14px rgba(255, 177, 74, 0.72)",
+                                              } : cardStyle;
 
-                                                          if (canClickOwnCardForAbility) {
-                                                              handleAbilityOwnCardClick(i);
-                                                              return;
-                                                          }
-
-                                                          if (canSwapDrawnCardWithHand) {
-                                                              swapDrawnCardWithHand(i);
-                                                              return;
-                                                          }
+                                              return (
+                                                  <div
+                                                      key={i}
+                                                      ref={(element) => {
+                                                          ownHandCardRefs.current[i] = element;
                                                       }}
-                                                      disabled={isPeekPhase
-                                                          ? (isSubmittingInitialPeek || isPeekCardSelected || (!isPeekCardSelected && revealedPeekCount >= 2))
-                                                          : !(canClickOwnCardForAbility || isHighlightedForAbility || canSwapDrawnCardWithHand)}
-                                                      onDragOver={(event) => handleOwnCardDragOver(event, i)}
-                                                      onDragEnter={(event) => handleOwnCardDragOver(event, i)}
-                                                      onDragLeave={() => handleOwnCardDragLeave(i)}
-                                                      onDrop={(event) => handleOwnCardDrop(event, i)}
-                                                      style={finalCardStyle}
-                                                  />
-                                              </div>
-                                          );
-                                      })}
+                                                      className="game-own-card-anchor"
+                                                  >
+                                                      <CardComponent
+                                                          hidden={isPostRoundPhase ? false : !peekVisibleCards[i]}
+                                                          value={card?.value}
+                                                          size="large"
+                                                          onClick={() => {
+                                                              if (isPeekPhase) {
+                                                                  handlePeekCardClick(i);
+                                                                  return;
+                                                              }
+
+                                                              if (canClickOwnCardForAbility) {
+                                                                  handleAbilityOwnCardClick(i);
+                                                                  return;
+                                                              }
+
+                                                              if (canSwapDrawnCardWithHand) {
+                                                                  swapDrawnCardWithHand(i);
+                                                                  return;
+                                                              }
+                                                          }}
+                                                          disabled={isPeekPhase
+                                                              ? (isSubmittingInitialPeek || isPeekCardSelected || (!isPeekCardSelected && revealedPeekCount >= 2))
+                                                              : !(canClickOwnCardForAbility || isHighlightedForAbility || canSwapDrawnCardWithHand)}
+                                                          onDragOver={(event) => handleOwnCardDragOver(event, i)}
+                                                          onDragEnter={(event) => handleOwnCardDragOver(event, i)}
+                                                          onDragLeave={() => handleOwnCardDragLeave(i)}
+                                                          onDrop={(event) => handleOwnCardDrop(event, i)}
+                                                          style={finalCardStyle}
+                                                      />
+                                                  </div>
+                                              );
+                                          })}
+                                      </div>
                                   </div>
                               </section>
 
@@ -5496,7 +5663,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                       </div>
                   )}
 
-                  {isPeekPhase && (
+                  {isPeekPhase && !isSpectatorMode && (
                       <div className="peek-phase-overlay" aria-hidden="true">
                           <div className="peek-phase-indicator">
                               Memorize 2 cards!
@@ -5505,7 +5672,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                   )}
 
                   {/* #17: PeekTimer overlay */}
-                  {isPeekPhase && (
+                  {isPeekPhase && !isSpectatorMode && (
                       <PeekTimer
                         duration={initialPeekDurationSeconds}
                       />
@@ -5554,7 +5721,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                   {/* #34: Final Score Screen */}
                   <FinalScoreScreen
                       isOpen={isRematchScreenPhase}
-                      players={finalScores}
+                      players={participantFinalScores}
                       selfUserId={selfUserId}
                       chatSessionId={lobbySessionId}
                       chatToken={token}
@@ -5565,6 +5732,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                       myRematchDecision={myRematchDecision}
                       isSubmittingRematchDecision={isSubmittingRematchDecision}
                       onChooseRematch={submitRematchChoice}
+                      hideRematchSection={isSpectatorMode}
                   />
                   {isRematchScreenPhase && (
                       <div className="inline-music-controller-hidden" aria-hidden="true">

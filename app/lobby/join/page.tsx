@@ -155,6 +155,10 @@ const openLobbyColumns: TableProps<OpenLobbyRow>["columns"] = [
             ) : (
                 <span
                     className={`users-status-pill ${row.canJoin ? "users-status-online" : "users-status-offline"}`}
+                    role="status"
+                    onClick={(event) => event.stopPropagation()}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
                 >
                     {row.canJoin ? "Open" : "Full"}
                 </span>
@@ -222,6 +226,10 @@ const LobbyJoin = () => {
             router.back();
             return;
         }
+        router.push("/dashboard");
+    };
+
+    const handleDashboard = () => {
         router.push("/dashboard");
     };
 
@@ -455,9 +463,12 @@ const LobbyJoin = () => {
                     </Card>
                     
                     <Card className="dashboard-container">
-                        <div className="create-lobby-actions">
+                        <div className="dashboard-nav-row">
                             <Button type="default" onClick={handleBack}>
                                 {"\u2190"} Back
+                            </Button>
+                            <Button type="default" onClick={handleDashboard}>
+                                {"\u2302"} Dashboard
                             </Button>
                         </div>
                     </Card>

@@ -26,29 +26,29 @@ type FriendOnlineSummary = {
 
 const GREETINGS_BY_TIME_SLOT: Record<GreetingSlot, string[]> = {
   morning: [
-    "Online-CABO is ready to be played.",
-    "Good morning! Welcome back to Online-CABO.",
-    "Good morning. Ready for Online-CABO?",
+    "CABO is ready to be played.",
+    "Good morning! Welcome back to CABO.",
+    "Good morning. Ready for CABO?",
   ],
   day: [
-    "Good day. Welcome to Online-CABO.",
-    "Good day. Enjoy Online-CABO.",
-    "Good day. Great to see you in Online-CABO.",
+    "Good day. Welcome to CABO.",
+    "Good day. Enjoy CABO.",
+    "Good day. Great to see you in CABO.",
   ],
   afternoon: [
-    "Good afternoon. Welcome back to Online-CABO.",
-    "Afternoon! Ready for Online-CABO?",
-    "Good afternoon. Let's play Online-CABO.",
+    "Good afternoon. Welcome back to CABO.",
+    "Afternoon! Ready for CABO?",
+    "Good afternoon. Let's play CABO.",
   ],
   evening: [
-    "Good evening. Welcome back to Online-CABO.",
-    "Evening! Time for Online-CABO.",
-    "Good evening. Online-CABO is ready.",
+    "Good evening. Welcome back to CABO.",
+    "Evening! Time for CABO.",
+    "Good evening. CABO is ready.",
   ],
   night: [
-    "Welcome back to Online-CABO, night owl.",
-    "Late session? Online-CABO is ready.",
-    "Online-CABO is ready whenever you are.",
+    "Welcome back to CABO, night owl.",
+    "Late session? CABO is ready.",
+    "CABO is ready whenever you are.",
   ],
 };
 

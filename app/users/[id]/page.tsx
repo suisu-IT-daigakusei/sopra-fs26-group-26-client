@@ -927,11 +927,43 @@ const UserProfilePage: React.FC = () => {
   const hasActiveResultsFilters =
     resultsLobbyCodeQuery.trim().length > 0 || resultsDateQuery.trim().length > 0;
 
+  const handleSpectateFromProfile = async (sourcePresence: ReturnType<typeof toPresenceKey>) => {
+    if (viewedUserId.length === 0) {
+      return;
+    }
+    const sessionId = String(user?.joinableSessionId ?? "").trim();
+    if (!sessionId) {
+      const sourceLabel =
+        sourcePresence === "playing"
+          ? "playing"
+          : sourcePresence === "lobby"
+            ? "lobby"
+            : "spectating";
+      alert(`This user's ${sourceLabel} session is currently unavailable.`);
+      return;
+    }
+
+    const usernameLabel = String(user?.username ?? user?.name ?? viewedUserId).trim() || "this user";
+    const confirmed = await showTimedConfirmation({
+      title: `Do you want to spectate ${usernameLabel}?`,
+      timeoutSeconds: 10,
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    router.push(`/spectator?sessionId=${encodeURIComponent(sessionId)}`);
+  };
+
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
       return;
     }
+    router.push("/dashboard");
+  };
+
+  const handleDashboard = () => {
     router.push("/dashboard");
   };
 
@@ -985,6 +1017,23 @@ const UserProfilePage: React.FC = () => {
   const isDefaultBio = shownBio === DEFAULT_BIO;
   const profilePresenceKey = toPresenceKey(user?.status);
   const profilePresenceLabel = user ? toPresenceLabel(profilePresenceKey) : "";
+  const sessionIdHint = String(user?.joinableSessionId ?? "").trim();
+  const canSpectateFromProfileStatus =
+    (profilePresenceKey === "spectating" || profilePresenceKey === "lobby" || profilePresenceKey === "playing") &&
+    viewedUserId.length > 0 &&
+    sessionIdHint.length > 0;
+  const profileSpectateSourceLabel =
+    profilePresenceKey === "playing"
+      ? "Playing"
+      : profilePresenceKey === "spectating"
+        ? "Spectating"
+        : "In lobby";
+  const canStatusActionFromProfile = canSpectateFromProfileStatus;
+  const profileStatusTitle = canSpectateFromProfileStatus
+    ? (sessionIdHint
+        ? `${profileSpectateSourceLabel} ${sessionIdHint}. Click to spectate.`
+        : `${profileSpectateSourceLabel}. Click to spectate.`)
+    : profilePresenceLabel;
   const viewedUsername = String(user?.username ?? user?.name ?? viewedUserId).trim() || "this user";
   const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
   const isFriend = viewedUserId.length > 0 && friendIdSet.has(viewedUserId);
@@ -1070,13 +1119,31 @@ const UserProfilePage: React.FC = () => {
                           {profileFriendButtonLoading ? (
                             <LoadingOutlined spin className="users-friend-action-loading-icon" />
                           ) : (
-                            <span className="users-friend-action-symbol">{"\u002b"}</span>
+                            <span className="users-friend-action-symbol users-friend-action-symbol-plus">{"\u002b"}</span>
                           )}
                         </Button>
                       )
                     ) : null}
                     <span
-                      className={`users-status-pill users-status-${profilePresenceKey} profile-title-status`}
+                      className={`users-status-pill users-status-${profilePresenceKey} profile-title-status${canStatusActionFromProfile ? " users-status-pill-action" : ""}`}
+                      title={profileStatusTitle}
+                      role={canStatusActionFromProfile ? "button" : undefined}
+                      tabIndex={canStatusActionFromProfile ? 0 : undefined}
+                      onClick={(event) => {
+                        if (!canStatusActionFromProfile) {
+                          return;
+                        }
+                        event.stopPropagation();
+                        void handleSpectateFromProfile(profilePresenceKey);
+                      }}
+                      onKeyDown={(event) => {
+                        if (!canStatusActionFromProfile || (event.key !== "Enter" && event.key !== " ")) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleSpectateFromProfile(profilePresenceKey);
+                      }}
                     >
                       {profilePresenceLabel}
                     </span>
@@ -1251,9 +1318,12 @@ const UserProfilePage: React.FC = () => {
           </Card>
 
           <Card className="dashboard-container">
-            <div className="dashboard-button-stack">
+            <div className="dashboard-nav-row">
               <Button type="default" onClick={handleBack}>
                 {"\u2190"} Back
+              </Button>
+              <Button type="default" onClick={handleDashboard}>
+                {"\u2302"} Dashboard
               </Button>
             </div>
           </Card>

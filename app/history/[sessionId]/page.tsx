@@ -618,13 +618,16 @@ const HistoryPage: React.FC = () => {
   const [roundMovesLoading, setRoundMovesLoading] = useState(false);
   const [roundMovesError, setRoundMovesError] = useState<string | null>(null);
   const [sessionLogEntries, setSessionLogEntries] = useState<SessionMoveLogEntry[] | null>(null);
-  const [isSharingSession, setIsSharingSession] = useState(false);
 
   const handleBack = useCallback(() => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
       return;
     }
+    router.push("/dashboard");
+  }, [router]);
+
+  const handleDashboard = useCallback(() => {
     router.push("/dashboard");
   }, [router]);
 
@@ -973,37 +976,6 @@ const HistoryPage: React.FC = () => {
   }, [loadRoundMoves, roundMovesLoading, selectedRoundScore, visibleRoundNumbers]);
 
   const sessionCodeLabel = sessionSnapshot?.sessionCode?.trim() || sessionId || "----";
-  const handleShareSession = useCallback(async () => {
-    if (isSharingSession || typeof window === "undefined") {
-      return;
-    }
-
-    const shareUrl = window.location.href;
-    const shareTitle = `Cabo Session ${sessionCodeLabel}`;
-    setIsSharingSession(true);
-
-    try {
-      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-        await navigator.share({
-          title: shareTitle,
-          url: shareUrl,
-        });
-        return;
-      }
-
-      if (
-        typeof navigator !== "undefined" &&
-        navigator.clipboard &&
-        typeof navigator.clipboard.writeText === "function"
-      ) {
-        await navigator.clipboard.writeText(shareUrl);
-      }
-    } catch {
-      // ignore aborts or permission issues
-    } finally {
-      setIsSharingSession(false);
-    }
-  }, [isSharingSession, sessionCodeLabel]);
 
   return (
     <div className="cabo-background">
@@ -1016,16 +988,6 @@ const HistoryPage: React.FC = () => {
                 <span className="dashboard-section-title">Session Scoreboard</span>
                 <span className="history-results-title-meta">
                   <span className="lobby-section-meta">{sessionCodeLabel}</span>
-                  <Button
-                    type="default"
-                    className="final-score-share-btn"
-                    onClick={() => {
-                      void handleShareSession();
-                    }}
-                    loading={isSharingSession}
-                  >
-                    Share Result
-                  </Button>
                 </span>
               </div>
             }
@@ -1142,9 +1104,12 @@ const HistoryPage: React.FC = () => {
           </Card>
 
           <Card className="dashboard-container">
-            <div className="dashboard-button-stack">
+            <div className="dashboard-nav-row">
               <Button type="default" onClick={handleBack}>
                 {"\u2190"} Back
+              </Button>
+              <Button type="default" onClick={handleDashboard}>
+                {"\u2302"} Dashboard
               </Button>
             </div>
           </Card>

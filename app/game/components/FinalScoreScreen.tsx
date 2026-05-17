@@ -36,6 +36,7 @@ interface FinalScoreScreenProps {
     myRematchDecision: RematchDecision | null;
     isSubmittingRematchDecision: boolean;
     onChooseRematch: (decision: RematchDecision) => void;
+    hideRematchSection?: boolean;
     // TODO: Backend needs to send final scores in game state
 }
 
@@ -127,6 +128,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     myRematchDecision,
     isSubmittingRematchDecision,
     onChooseRematch,
+    hideRematchSection = false,
 }) => {
     if (!isOpen) return null;
     // Inline decision confirmation with countdown auto-cancel.
@@ -267,6 +269,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     const normalizedChatToken = String(chatToken ?? "").trim();
     const normalizedChatUserId = String(chatUserId ?? "").trim();
     const shouldShowChat =
+        !hideRematchSection &&
         normalizedChatSessionId.length > 0 &&
         normalizedChatToken.length > 0 &&
         normalizedChatUserId.length > 0;
@@ -351,15 +354,6 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                     <h1 className="final-score-title">
                         Round Finished
                     </h1>
-                    <Button
-                        type="default"
-                        className="final-score-share-btn"
-                        onClick={() => {
-                            // Placeholder for #40 Share Result flow.
-                        }}
-                    >
-                        Share Result
-                    </Button>
                 </div>
 
                 {hasSpecialWin && (
@@ -430,6 +424,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         </tbody>
                     </table>
                 </div>
+                {!hideRematchSection ? (
                 <div className="final-score-rematch">
                     <h2 className="final-score-rematch-title">
                         Rematch?{" "}
@@ -531,6 +526,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         </div>
                     ) : null}
                 </div>
+                ) : null}
             </div>
         </div>
     );

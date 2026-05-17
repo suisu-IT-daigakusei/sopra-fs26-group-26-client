@@ -26,5 +26,6 @@ export interface User {
   musicVolume?: number | null;
   soundEffectsVolume?: number | null;
   musicBlacklist?: string[] | null;
+  joinableSessionId?: string | null;
 }
  

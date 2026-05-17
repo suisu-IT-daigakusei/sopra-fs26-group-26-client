@@ -34,6 +34,9 @@ type UserRow = User & {
   friendButtonLoading: boolean;
   onAddFriend: (() => void) | null;
   onRemoveFriend: (() => void) | null;
+  canStatusAction: boolean;
+  statusActionTitle: string;
+  onStatusAction: (() => void) | null;
 };
 
 const USERS_PAGE_SIZE = 10;
@@ -143,9 +146,30 @@ const columns: TableProps<UserRow>["columns"] = [
         : row.canRemoveFriend
           ? "Remove Friend"
           : "Friend Request Sent";
+      const canUseStatusAction = row.canStatusAction && row.onStatusAction != null;
       return (
         <div className="users-status-action">
-          <span className={`users-status-pill users-status-${row.presenceKey}`}>
+          <span
+            className={`users-status-pill users-status-${row.presenceKey}${canUseStatusAction ? " users-status-pill-action" : ""}`}
+            title={row.statusActionTitle || row.presenceLabel}
+            role={canUseStatusAction ? "button" : undefined}
+            tabIndex={canUseStatusAction ? 0 : undefined}
+            onClick={(event) => {
+              if (!canUseStatusAction) {
+                return;
+              }
+              event.stopPropagation();
+              void row.onStatusAction?.();
+            }}
+            onKeyDown={(event) => {
+              if (!canUseStatusAction || (event.key !== "Enter" && event.key !== " ")) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              void row.onStatusAction?.();
+            }}
+          >
             {row.presenceLabel}
           </span>
           {row.canRemoveFriend ? (
@@ -188,7 +212,7 @@ const columns: TableProps<UserRow>["columns"] = [
               {row.friendButtonLoading ? (
                 <LoadingOutlined spin className="users-friend-action-loading-icon" />
               ) : (
-                <span className="users-friend-action-symbol">{"\u002b"}</span>
+                <span className="users-friend-action-symbol users-friend-action-symbol-plus">{"\u002b"}</span>
               )}
             </Button>
           )}
@@ -545,6 +569,34 @@ const UsersPage: React.FC = () => {
     }
   }, [apiService, token, loadFriendIds, loadOutgoingPendingFriendRequestIds]);
 
+  const handleSpectateFromStatus = useCallback(async (
+    targetUsername: string,
+    knownSessionId: string,
+    sourcePresence: PresenceKey,
+  ) => {
+    const resolvedSessionId = String(knownSessionId ?? "").trim();
+    if (!resolvedSessionId) {
+      const sourceLabel =
+        sourcePresence === "playing"
+          ? "playing"
+          : sourcePresence === "lobby"
+            ? "lobby"
+            : "spectating";
+      alert(`This user's ${sourceLabel} session is currently unavailable.`);
+      return;
+    }
+
+    const confirmed = await showTimedConfirmation({
+      title: `Do you want to spectate ${targetUsername}?`,
+      timeoutSeconds: 10,
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    router.push(`/spectator?sessionId=${encodeURIComponent(resolvedSessionId)}`);
+  }, [router]);
+
   useEffect(() => {
     const authToken = token.trim();
     const listedUsers = users ?? [];
@@ -646,6 +698,22 @@ const UsersPage: React.FC = () => {
           const gamesWonRatePct =
             gamesPlayed != null && gamesPlayed > 0 ? (gamesWonValue / gamesPlayed) * 100 : null;
           const presenceKey = toPresenceKey(user.status);
+          const sessionIdHint = String(user.joinableSessionId ?? "").trim();
+          const canSpectateFromStatus =
+            (presenceKey === "spectating" || presenceKey === "lobby" || presenceKey === "playing") &&
+            normalizedId.length > 0 &&
+            sessionIdHint.length > 0;
+          const spectateSourceLabel =
+            presenceKey === "playing"
+              ? "Playing"
+              : presenceKey === "spectating"
+                ? "Spectating"
+                : "In lobby";
+          const statusActionTitle = canSpectateFromStatus
+            ? (sessionIdHint
+                ? `${spectateSourceLabel} ${sessionIdHint}. Click to spectate.`
+                : `${spectateSourceLabel}. Click to spectate.`)
+            : toPresenceLabel(presenceKey);
           const averageScoreRaw = user.averageScorePerRound;
           const averageScore =
             toFiniteMetric(averageScoreRaw);
@@ -671,6 +739,11 @@ const UsersPage: React.FC = () => {
             friendButtonLoading: isAddingFriend || isRemovingFriend || isPendingFriendRequest,
             onAddFriend: canAddFriend ? async () => handleAddFriend(normalizedId, usernameLabel) : null,
             onRemoveFriend: canRemoveFriend ? async () => handleRemoveFriend(normalizedId, usernameLabel) : null,
+            canStatusAction: canSpectateFromStatus,
+            statusActionTitle,
+            onStatusAction: canSpectateFromStatus
+              ? async () => handleSpectateFromStatus(usernameLabel, sessionIdHint, presenceKey)
+              : null,
           };
         }),
     [
@@ -684,6 +757,7 @@ const UsersPage: React.FC = () => {
       token,
       userId,
       users,
+      handleSpectateFromStatus,
     ],
   );
 
@@ -752,6 +826,10 @@ const UsersPage: React.FC = () => {
       router.back();
       return;
     }
+    router.push("/dashboard");
+  };
+
+  const handleDashboard = () => {
     router.push("/dashboard");
   };
 
@@ -872,9 +950,12 @@ const UsersPage: React.FC = () => {
           </Card>
 
           <Card className="dashboard-container">
-            <div className="dashboard-button-stack">
+            <div className="dashboard-nav-row">
               <Button type="default" onClick={handleBack}>
                 {"\u2190"} Back
+              </Button>
+              <Button type="default" onClick={handleDashboard}>
+                {"\u2302"} Dashboard
               </Button>
             </div>
           </Card>

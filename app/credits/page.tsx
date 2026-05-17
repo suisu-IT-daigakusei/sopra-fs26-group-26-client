@@ -135,6 +135,18 @@ export default function CreditsPage() {
     };
   }, [creditLines]);
 
+  const handleBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push("/dashboard");
+  };
+
+  const handleDashboard = () => {
+    router.push("/dashboard");
+  };
+
   return (
     <div className="cabo-background">
       <div className="login-container">
@@ -190,9 +202,12 @@ export default function CreditsPage() {
           </Card>
 
           <Card className="dashboard-container">
-            <div className="dashboard-button-stack">
-              <Button type="default" onClick={() => router.back()}>
+            <div className="dashboard-nav-row">
+              <Button type="default" onClick={handleBack}>
                 {"\u2190"} Back
+              </Button>
+              <Button type="default" onClick={handleDashboard}>
+                {"\u2302"} Dashboard
               </Button>
             </div>
           </Card>

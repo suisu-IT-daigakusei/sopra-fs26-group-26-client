@@ -390,6 +390,10 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   justify-content: flex-end;
 }
 
+.lobby-setting-row-control-readonly {
+  justify-content: flex-end;
+}
+
 .lobby-setting-row-control .ant-slider {
   flex: 1;
   margin: 0;
@@ -440,6 +444,18 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   font-size: 20px;
   font-weight: 700;
   line-height: 1;
+}
+
+.lobby-players-title-subline {
+  width: 100%;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--cabo-text-color);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .lobby-header-row {
@@ -728,6 +744,20 @@ html.cabo-text-dark .dashboard-container .ant-card-head {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.dashboard-nav-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.dashboard-nav-row > .ant-btn {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
 }
 
 .credits-help-block {
@@ -1732,14 +1762,12 @@ html.cabo-text-dark .settings-appearance-dot-btn {
   display: block;
   width: 100%;
   max-width: 100%;
-  letter-spacing: normal;
-  word-spacing: 0;
+  line-height: 1.25;
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 1.25;
 }
 
 .users-username-cell-action {
@@ -1772,7 +1800,8 @@ html.cabo-text-dark .settings-appearance-dot-btn {
   border-color: rgba(255, 255, 255, 0.2) !important;
 }
 
-.users-overview-table .ant-table-content {
+.users-overview-table .ant-table-content,
+.responsive-list-table .ant-table-content {
   overflow-x: hidden !important;
 }
 
@@ -1783,41 +1812,30 @@ html.cabo-text-dark .settings-appearance-dot-btn {
 }
 
 /* responsive tables */
-.responsive-list-table .ant-table-content {
-  overflow-x: hidden !important;
-}
-
 .responsive-list-table .ant-table {
   width: 100% !important;
   table-layout: fixed !important;
 }
 
-.responsive-list-table .ant-table-thead > tr > th {
-  padding: 8px 6px !important;
-  font-size: 13px;
-  white-space: normal !important;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-.responsive-list-table .ant-table-thead > tr > th .ant-table-column-title {
-  display: block;
-  min-width: 0;
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
+.responsive-list-table .ant-table-thead > tr > th,
 .responsive-list-table .ant-table-tbody > tr > td {
   padding: 8px 6px !important;
   font-size: 13px;
   white-space: normal !important;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.responsive-list-table .ant-table-thead > tr > th .ant-table-column-title,
+.responsive-list-table .ant-table-tbody > tr > td {
   overflow: visible;
   text-overflow: clip;
+}
+
+.responsive-list-table .ant-table-thead > tr > th .ant-table-column-title {
+  display: block;
+  min-width: 0;
+  white-space: normal;
 }
 
 .users-overview-table .users-status-col .ant-table-column-sorters {
@@ -1834,6 +1852,8 @@ html.cabo-text-dark .settings-appearance-dot-btn {
 }
 
 .users-status-pill {
+  --users-status-bg: #5a5a5a;
+  --users-status-border: #4a4a4a;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1841,12 +1861,24 @@ html.cabo-text-dark .settings-appearance-dot-btn {
   height: 28px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid transparent;
+  border: 1px solid var(--users-status-border);
+  background: var(--users-status-bg);
   font-size: 13px;
   font-weight: 700;
   line-height: 1;
   color: #ffffff;
   white-space: nowrap;
+}
+
+.users-status-pill-action {
+  cursor: pointer;
+}
+
+.users-status-pill-action:hover,
+.users-status-pill-action:focus-visible {
+  filter: brightness(1.08);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
 }
 
 .users-status-action {
@@ -1864,7 +1896,6 @@ html.cabo-text-dark .settings-appearance-dot-btn {
   padding: 0;
   font-weight: 700;
   line-height: 1;
-  color: #ffffff;
 }
 
 .users-friend-add-btn.ant-btn {
@@ -1874,6 +1905,7 @@ html.cabo-text-dark .settings-appearance-dot-btn {
   aspect-ratio: 1 / 1;
   border-radius: 50% !important;
   font-size: 16px;
+  color: #ffffff;
   border-color: color-mix(in srgb, var(--cabo-primary-color) 74%, #111111);
   background: var(--cabo-primary-color);
 }
@@ -1895,12 +1927,17 @@ html.cabo-text-dark .settings-appearance-dot-btn {
   align-items: center;
   justify-content: center;
   line-height: 1;
+  vertical-align: middle;
 }
 
 .users-friend-action-spin {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.users-friend-action-symbol-plus {
+  transform: translateY(-0.08em);
 }
 
 .users-friend-action-loading-icon {
@@ -1916,11 +1953,7 @@ html.cabo-text-dark .settings-appearance-dot-btn {
 }
 
 .users-friend-remove-btn.ant-btn,
-.users-friend-remove-btn.ant-btn:hover,
-.users-friend-remove-btn.ant-btn:focus,
-.users-friend-remove-btn.ant-btn:active,
-.users-friend-remove-btn.ant-btn.ant-btn-disabled,
-.users-friend-remove-btn.ant-btn:disabled {
+.users-friend-remove-btn.ant-btn:is(:hover, :focus, :active, .ant-btn-disabled, :disabled) {
   box-shadow: none !important;
   outline: none !important;
   opacity: 1;
@@ -1942,14 +1975,10 @@ html.cabo-text-dark .users-friend-add-btn.ant-btn:not(:disabled):hover {
 }
 
 html.cabo-text-dark .users-friend-remove-btn.ant-btn,
-html.cabo-text-dark .users-friend-remove-btn.ant-btn:hover,
-html.cabo-text-dark .users-friend-remove-btn.ant-btn:focus,
-html.cabo-text-dark .users-friend-remove-btn.ant-btn:active,
-html.cabo-text-dark .users-friend-remove-btn.ant-btn.ant-btn-disabled,
-html.cabo-text-dark .users-friend-remove-btn.ant-btn:disabled {
-  color: #000000;
-  border-color: #8d2a20;
-  background: #b7372a;
+html.cabo-text-dark .users-friend-remove-btn.ant-btn:is(:hover, :focus, :active, .ant-btn-disabled, :disabled) {
+  color: #000000 !important;
+  border-color: #8d2a20 !important;
+  background: #b7372a !important;
 }
 
 /* Unified timed confirmation surfaces (modal + inline). */
@@ -1965,17 +1994,13 @@ html.cabo-text-dark .users-friend-remove-btn.ant-btn:disabled {
   --cabo-confirm-default-btn-bg: color-mix(in srgb, #131a27 84%, transparent);
 }
 
-.cabo-timed-confirm-modal .ant-modal-content,
-.cabo-timed-confirm-modal.ant-modal-content {
-  background: var(--cabo-confirm-surface) !important;
-  border: 1px solid var(--cabo-confirm-border);
-  border-radius: 12px;
-}
-
-/* Fallback selectors for static Modal.confirm portals (ensures class scoping still hits). */
-.ant-modal-root.cabo-timed-confirm-modal .ant-modal-content,
-.ant-modal-wrap.cabo-timed-confirm-modal .ant-modal-content,
-.ant-modal.cabo-timed-confirm-modal .ant-modal-content {
+.cabo-timed-confirm-modal.ant-modal-content,
+:is(
+  .cabo-timed-confirm-modal,
+  .ant-modal-root.cabo-timed-confirm-modal,
+  .ant-modal-wrap.cabo-timed-confirm-modal,
+  .ant-modal.cabo-timed-confirm-modal
+) .ant-modal-content {
   background: var(--cabo-confirm-surface) !important;
   border: 1px solid var(--cabo-confirm-border);
   border-radius: 12px;
@@ -1991,15 +2016,19 @@ html.cabo-text-dark .users-friend-remove-btn.ant-btn:disabled {
   color: var(--cabo-confirm-content) !important;
 }
 
-.ant-modal-root.cabo-timed-confirm-modal .ant-modal-confirm-title,
-.ant-modal-wrap.cabo-timed-confirm-modal .ant-modal-confirm-title,
-.ant-modal.cabo-timed-confirm-modal .ant-modal-confirm-title {
+:is(
+  .ant-modal-root.cabo-timed-confirm-modal,
+  .ant-modal-wrap.cabo-timed-confirm-modal,
+  .ant-modal.cabo-timed-confirm-modal
+) .ant-modal-confirm-title {
   color: var(--cabo-confirm-title) !important;
 }
 
-.ant-modal-root.cabo-timed-confirm-modal .ant-modal-confirm-content,
-.ant-modal-wrap.cabo-timed-confirm-modal .ant-modal-confirm-content,
-.ant-modal.cabo-timed-confirm-modal .ant-modal-confirm-content {
+:is(
+  .ant-modal-root.cabo-timed-confirm-modal,
+  .ant-modal-wrap.cabo-timed-confirm-modal,
+  .ant-modal.cabo-timed-confirm-modal
+) .ant-modal-confirm-content {
   color: var(--cabo-confirm-content) !important;
 }
 
@@ -2096,10 +2125,12 @@ html[data-cabo-appearance="dark"] .cabo-timed-confirm-modal {
 }
 
 /* Explicit mode classes from showTimedConfirmation() for static modal portals. */
-.cabo-timed-confirm-modal-light,
-.ant-modal-root.cabo-timed-confirm-modal-light,
-.ant-modal-wrap.cabo-timed-confirm-modal-light,
-.ant-modal.cabo-timed-confirm-modal-light {
+:is(
+  .cabo-timed-confirm-modal-light,
+  .ant-modal-root.cabo-timed-confirm-modal-light,
+  .ant-modal-wrap.cabo-timed-confirm-modal-light,
+  .ant-modal.cabo-timed-confirm-modal-light
+) {
   --cabo-confirm-surface: rgba(250, 246, 236, 0.98);
   --cabo-confirm-border: rgba(44, 52, 70, 0.22);
   --cabo-confirm-title: #1e2b42;
@@ -2111,10 +2142,12 @@ html[data-cabo-appearance="dark"] .cabo-timed-confirm-modal {
   --cabo-confirm-default-btn-bg: rgba(255, 255, 255, 0.88);
 }
 
-.cabo-timed-confirm-modal-dark,
-.ant-modal-root.cabo-timed-confirm-modal-dark,
-.ant-modal-wrap.cabo-timed-confirm-modal-dark,
-.ant-modal.cabo-timed-confirm-modal-dark {
+:is(
+  .cabo-timed-confirm-modal-dark,
+  .ant-modal-root.cabo-timed-confirm-modal-dark,
+  .ant-modal-wrap.cabo-timed-confirm-modal-dark,
+  .ant-modal.cabo-timed-confirm-modal-dark
+) {
   --cabo-confirm-surface: rgba(18, 22, 30, 0.98);
   --cabo-confirm-border: rgba(255, 255, 255, 0.2);
   --cabo-confirm-title: #ffffff;
@@ -2126,49 +2159,30 @@ html[data-cabo-appearance="dark"] .cabo-timed-confirm-modal {
   --cabo-confirm-default-btn-bg: color-mix(in srgb, #131a27 84%, transparent);
 }
 
-/* Final hard fallback if class-scoped vars fail to attach in static modal tree. */
-html[data-cabo-appearance="dark"] .ant-modal-confirm .ant-modal-content {
+/* Final fallback when modal-scope variables fail to attach. */
+:is(html[data-cabo-appearance="dark"], html:not(.cabo-text-dark)) .ant-modal-confirm .ant-modal-content {
   background: rgba(18, 22, 30, 0.98) !important;
   border: 1px solid rgba(255, 255, 255, 0.2) !important;
 }
 
-html[data-cabo-appearance="dark"] .ant-modal-confirm .ant-modal-confirm-title,
-html[data-cabo-appearance="dark"] .ant-modal-confirm .ant-modal-confirm-content,
-html[data-cabo-appearance="dark"] .ant-modal-confirm .ant-modal-confirm-content p {
+:is(html[data-cabo-appearance="dark"], html:not(.cabo-text-dark)) .ant-modal-confirm :is(
+  .ant-modal-confirm-title,
+  .ant-modal-confirm-content,
+  .ant-modal-confirm-content p
+) {
   color: #ffffff !important;
 }
 
-html[data-cabo-appearance="light"] .ant-modal-confirm .ant-modal-content {
+:is(html[data-cabo-appearance="light"], html.cabo-text-dark) .ant-modal-confirm .ant-modal-content {
   background: rgba(250, 246, 236, 0.98) !important;
   border: 1px solid rgba(44, 52, 70, 0.22) !important;
 }
 
-html[data-cabo-appearance="light"] .ant-modal-confirm .ant-modal-confirm-title,
-html[data-cabo-appearance="light"] .ant-modal-confirm .ant-modal-confirm-content,
-html[data-cabo-appearance="light"] .ant-modal-confirm .ant-modal-confirm-content p {
-  color: #1e2b42 !important;
-}
-
-/* Secondary fallback keyed off cabo-text-dark class when data attribute races or is absent. */
-html:not(.cabo-text-dark) .ant-modal-confirm .ant-modal-content {
-  background: rgba(18, 22, 30, 0.98) !important;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-}
-
-html:not(.cabo-text-dark) .ant-modal-confirm .ant-modal-confirm-title,
-html:not(.cabo-text-dark) .ant-modal-confirm .ant-modal-confirm-content,
-html:not(.cabo-text-dark) .ant-modal-confirm .ant-modal-confirm-content p {
-  color: #ffffff !important;
-}
-
-html.cabo-text-dark .ant-modal-confirm .ant-modal-content {
-  background: rgba(250, 246, 236, 0.98) !important;
-  border: 1px solid rgba(44, 52, 70, 0.22) !important;
-}
-
-html.cabo-text-dark .ant-modal-confirm .ant-modal-confirm-title,
-html.cabo-text-dark .ant-modal-confirm .ant-modal-confirm-content,
-html.cabo-text-dark .ant-modal-confirm .ant-modal-confirm-content p {
+:is(html[data-cabo-appearance="light"], html.cabo-text-dark) .ant-modal-confirm :is(
+  .ant-modal-confirm-title,
+  .ant-modal-confirm-content,
+  .ant-modal-confirm-content p
+) {
   color: #1e2b42 !important;
 }
 
@@ -2286,10 +2300,6 @@ html.cabo-text-dark .final-score-confirm-countdown {
 }
 
 @media (max-aspect-ratio: 10/21) {
-  .responsive-list-table .users-username-col {
-    min-width: 0 !important;
-  }
-
   .responsive-list-table .users-status-pill {
     min-width: 48px;
     padding: 0 3px;
@@ -2333,33 +2343,33 @@ html.cabo-text-dark .final-score-confirm-countdown {
 }
 
 .users-status-online {
-  background-color: #2f9e44;
-  border-color: #23783a;
+  --users-status-bg: #2f9e44;
+  --users-status-border: #23783a;
 }
 
 .users-status-offline {
-  background-color: #c0392b;
-  border-color: #9e2f24;
+  --users-status-bg: #c0392b;
+  --users-status-border: #9e2f24;
 }
 
 .users-status-lobby {
-  background-color: #1f6fd1;
-  border-color: #1959a8;
+  --users-status-bg: #1f6fd1;
+  --users-status-border: #1959a8;
 }
 
 .users-status-playing {
-  background-color: #c27c00;
-  border-color: #9b6400;
+  --users-status-bg: #c27c00;
+  --users-status-border: #9b6400;
 }
 
 .users-status-spectating {
-  background-color: #5b7cfa;
-  border-color: #4a65cb;
+  --users-status-bg: #5b7cfa;
+  --users-status-border: #4a65cb;
 }
 
 .users-status-unknown {
-  background-color: #5a5a5a;
-  border-color: #4a4a4a;
+  --users-status-bg: #5a5a5a;
+  --users-status-border: #4a4a4a;
 }
 
 .profile-title-status {
@@ -2915,19 +2925,6 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   min-height: 200px;
 }
 
-.create-lobby-player-action.ant-btn.ant-btn-disabled,
-.create-lobby-player-action.ant-btn:disabled {
-  width: 112px;
-  min-width: 112px;
-  height: 34px;
-  border-radius: 999px;
-  background-color: #5a5a5a !important;
-  border-color: #4a4a4a !important;
-  color: #a3a3a3 !important;
-  cursor: not-allowed !important;
-  opacity: 1;
-}
-
 .create-lobby-player-action.ant-btn {
   width: 112px;
   min-width: 112px;
@@ -2938,9 +2935,16 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   justify-content: center;
 }
 
-/* Keep semantic lobby statuses after generic disabled style */
-.create-lobby-player-action.lobby-invite-joined-btn.ant-btn.ant-btn-disabled,
-.create-lobby-player-action.lobby-invite-joined-btn.ant-btn:disabled {
+.create-lobby-player-action.ant-btn:is(.ant-btn-disabled, :disabled) {
+  background-color: #5a5a5a !important;
+  border-color: #4a4a4a !important;
+  color: #a3a3a3 !important;
+  cursor: not-allowed !important;
+  opacity: 1;
+}
+
+/* Keep semantic lobby "Joined" status after generic disabled style. */
+.create-lobby-player-action.lobby-invite-joined-btn.ant-btn:is(.ant-btn-disabled, :disabled) {
   background-color: #2f9e44 !important;
   border-color: #23783a !important;
   color: #ffffff !important;
@@ -2983,24 +2987,20 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 
 .lobby-leave-btn.ant-btn-primary,
 .lobby-leave-btn.ant-btn-primary:hover,
-.lobby-leave-btn.ant-btn-primary:focus {
+.lobby-leave-btn.ant-btn-primary:focus,
+.lobby-leave-btn.ant-btn-primary:is(.ant-btn-disabled, :disabled),
+.lobby-leave-btn.ant-btn-primary:is(.ant-btn-disabled, :disabled):is(:hover, :focus) {
   width: 100%;
   background-color: #c0392b !important;
   border-color: #9e2f24 !important;
   color: var(--cabo-text-color) !important;
+}
+
+.lobby-leave-btn.ant-btn-primary:not(.ant-btn-disabled):not(:disabled) {
   cursor: pointer !important;
 }
 
-.lobby-leave-btn.ant-btn-primary.ant-btn-disabled,
-.lobby-leave-btn.ant-btn-primary:disabled,
-.lobby-leave-btn.ant-btn-primary.ant-btn-disabled:hover,
-.lobby-leave-btn.ant-btn-primary:disabled:hover,
-.lobby-leave-btn.ant-btn-primary.ant-btn-disabled:focus,
-.lobby-leave-btn.ant-btn-primary:disabled:focus {
-  width: 100%;
-  background-color: #c0392b !important;
-  border-color: #9e2f24 !important;
-  color: var(--cabo-text-color) !important;
+.lobby-leave-btn.ant-btn-primary:is(.ant-btn-disabled, :disabled) {
   opacity: 1 !important;
   cursor: not-allowed !important;
 }
@@ -3044,53 +3044,32 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 /* ============================================
    FORM & INPUT STYLES
    ============================================ */
-/* Required field asterisk color (*) - dark rose */
+/* Required field markers and validation text */
 .ant-form-item-required::before {
-    color: #7e3e56 !important;
+  color: #7e3e56 !important;
 }
 
-/* Error message text color - e.g. "Please input your username!" */
 .ant-form-item-explain-error {
-    color: #ffb1d4 !important;
+  color: #ffb1d4 !important;
 }
 
-/* Input border color when validation fails (error state) */
-.ant-input-status-error {
-    border-color: #c4827a !important; /* ← geändert von #ffb1d4 */
-}
-
-/* Input border + glow when focused AND in error state */
-.ant-input-status-error:focus {
-    border-color: #c4827a !important; /* ← geändert von #ff69b4 */
-    box-shadow: 0 0 0 2px rgba(196, 130, 122, 0.2) !important;
-}
-
-/* Password input hover */
-.ant-input-affix-wrapper:hover {
-    border-color: #c4827a !important;
-}
-
-/* Password input focus */
+/* Input border and focus ring */
+.ant-input-status-error,
+.ant-input-affix-wrapper-status-error,
+.ant-input-status-error:focus,
+.ant-input:hover,
+.ant-input:focus,
+.ant-input-affix-wrapper:hover,
 .ant-input-affix-wrapper:focus,
 .ant-input-affix-wrapper-focused {
-    border-color: #c4827a !important;
-    box-shadow: 0 0 0 2px rgba(196, 130, 122, 0.2) !important;
+  border-color: #c4827a !important;
 }
 
-/* Password input error */
-.ant-input-affix-wrapper-status-error {
-    border-color: #c4827a !important;
-}
-
-/* Input field hover - mauve/rose border */
-.ant-input:hover {
-    border-color: #c4827a !important;
-}
-
-/* Input field focus - mauve/rose border */
-.ant-input:focus {
-    border-color: #c4827a !important;
-    box-shadow: 0 0 0 2px rgba(196, 130, 122, 0.2) !important;
+.ant-input-status-error:focus,
+.ant-input:focus,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused {
+  box-shadow: 0 0 0 2px rgba(196, 130, 122, 0.2) !important;
 }
 
 /* ============================================
@@ -4124,13 +4103,6 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   text-align: left;
 }
 
-.final-score-share-btn.ant-btn {
-  white-space: nowrap;
-  border-color: rgba(232, 168, 124, 0.5);
-  color: #ffd3a8;
-  background: rgba(232, 168, 124, 0.08);
-}
-
 .final-score-special-win {
   margin-bottom: 14px;
   border: 1px solid #a8b87a;
@@ -4741,6 +4713,8 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   --game-cabo-reveal-main-gap: 5%;
   --game-cabo-reveal-row-4: 15%;
   --game-cabo-reveal-row-5: 10%;
+  --game-cabo-reveal-point-tile-max-height: clamp(52px, 8.6vh, 74px);
+  --game-cabo-reveal-point-pill-max-height: clamp(54px, 9.1vh, 80px);
   position: absolute;
   inset: 0;
   display: grid;
@@ -4937,7 +4911,8 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%;
+  height: min(100%, var(--game-cabo-reveal-point-tile-max-height));
+  padding: 4px 8px;
   text-align: center;
   color: #fff0d2;
   font-size: clamp(20px, 3vmin, 42px);
@@ -4956,8 +4931,10 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   display: flex;
   align-items: center;
   justify-content: center;
+  align-self: center;
+  justify-self: stretch;
   width: 100%;
-  height: 100%;
+  height: min(100%, var(--game-cabo-reveal-point-pill-max-height));
   padding: 6px 14px;
   border-radius: 999px;
   border: 1px solid rgba(255, 219, 150, 0.72);
@@ -5310,6 +5287,25 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   background: rgba(150, 50, 50, 0.88);
 }
 
+.game-center-notification-spectator-peek {
+  background: var(--cabo-primary-color);
+  color: #ffffff;
+  border-color: color-mix(in srgb, var(--cabo-primary-color) 58%, #ffffff);
+  width: min(100%, 46ch);
+  justify-self: center;
+  margin-inline: auto;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+html[data-cabo-appearance="light"] .game-center-notification-spectator-peek,
+html.cabo-text-dark .game-center-notification-spectator-peek {
+  color: #000000;
+}
+
 .game-center-notification-placeholder {
   visibility: hidden;
 }
@@ -5530,6 +5526,18 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 }
 
 /* Bottom cards */
+.game-bottom-seat-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.game-spectator-bottom-seat-name {
+  align-self: center;
+}
+
 .bottom-cards {
   position: relative;
   display: flex;
@@ -6159,10 +6167,6 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 
   .final-score-title {
     font-size: 26px;
-  }
-
-  .final-score-share-btn.ant-btn {
-    margin-left: auto;
   }
 
   .final-score-table th,

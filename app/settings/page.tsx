@@ -882,6 +882,18 @@ const SettingsPage = () => {
     router.push("/dashboard");
   };
 
+  const handleDashboard = async () => {
+    if (!(await confirmLeaveWithUnsavedChanges())) {
+      return;
+    }
+
+    skipUnsavedGuardRef.current = true;
+    window.setTimeout(() => {
+      skipUnsavedGuardRef.current = false;
+    }, 1200);
+    router.push("/dashboard");
+  };
+
   return (
     <div className="cabo-background">
       <div className="login-container">
@@ -1292,8 +1304,13 @@ const SettingsPage = () => {
           </Card>
 
           <Card className="dashboard-container">
-            <div className="dashboard-button-stack">
-              <Button type="default" onClick={() => void handleBack()}>{"\u2190"} Back</Button>
+            <div className="dashboard-nav-row">
+              <Button type="default" onClick={() => void handleBack()}>
+                {"\u2190"} Back
+              </Button>
+              <Button type="default" onClick={() => void handleDashboard()}>
+                {"\u2302"} Dashboard
+              </Button>
             </div>
           </Card>
 
