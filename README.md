@@ -65,7 +65,7 @@ The environment variables for the backend API URL are configured in `app/utils/d
 * **Liun Grichting** - Backend - [@liun777](https://github.com/liun777)
 * **Jana Graf** - Backend - [@janagraf](https://github.com/janagraf)
 * **Jan Alexander Studenski** - Frontend - [@suisu-IT-daigakusei](https://github.com/suisu-IT-daigakusei)
-* **Uliana Solohub** - Backend - [@uliana](https://github.com/uIiana)
+* **Uliana Solohub** - Backend - [@uIiana](https://github.com/uIiana)
 
 See also:(https://github.com/liun777/sopra-fs26-group-26-client/graphs/contributors)
 
