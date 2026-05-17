@@ -87,9 +87,28 @@ function sortPlayersByScore(players: FinalPlayerResolved[], scoreByUserId: Recor
 function getRanksByUserId(players: FinalPlayerResolved[], scoreByUserId: Record<number, number | null>): Record<number, number> {
     const sorted = sortPlayersByScore(players, scoreByUserId);
     const out: Record<number, number> = {};
-    sorted.forEach((player, index) => {
-        out[player.userId] = index + 1;
-    });
+    
+    // handle ties correctly
+    let currentRank = 1;
+    for (let i = 0; i < sorted.length; i++) {
+        const player = sorted[i];
+        const currentScore = scoreByUserId[player.userId];
+        
+        // Check if this player has the same score as the previous player
+        if (i > 0) {
+            const prevPlayer = sorted[i - 1];
+            const prevScore = scoreByUserId[prevPlayer.userId];
+            
+            // If scores are different, update the rank to skip tied positions
+            if (currentScore !== prevScore) {
+                currentRank = i + 1;
+            }
+            // If scores are the same, keep the same rank
+        }
+        
+        out[player.userId] = currentRank;
+    }
+    
     return out;
 }
 
@@ -109,9 +128,25 @@ function getRoundRanksByUserId(players: FinalPlayerResolved[], roundIndex: numbe
         });
 
     const out: Record<number, number> = {};
-    scored.forEach((entry, index) => {
-        out[entry.userId] = index + 1;
-    });
+    
+    // handle ties correctly  
+    let currentRank = 1;
+    for (let i = 0; i < scored.length; i++) {
+        const entry = scored[i];
+        
+        // Check if this player has the same score as the previous player
+        if (i > 0) {
+            const prevEntry = scored[i - 1];
+            
+            // If scores are different, update the rank
+            if (entry.score !== prevEntry.score) {
+                currentRank = i + 1;
+            }
+        }
+        
+        out[entry.userId] = currentRank;
+    }
+    
     return out;
 }
 

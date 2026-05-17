@@ -57,9 +57,25 @@ function sortPlayersByScore(players: PlayerScoreResolved[], scoreByUserId: Recor
 function getRanksByUserId(players: PlayerScoreResolved[], scoreByUserId: Record<number, number | null>): Record<number, number> {
     const sorted = sortPlayersByScore(players, scoreByUserId);
     const out: Record<number, number> = {};
-    sorted.forEach((player, index) => {
-        out[player.userId] = index + 1;
-    });
+    
+    // handle ties correctly
+    let currentRank = 1;
+    for (let i = 0; i < sorted.length; i++) {
+        const player = sorted[i];
+        const currentScore = scoreByUserId[player.userId];
+        
+        if (i > 0) {
+            const prevPlayer = sorted[i - 1];
+            const prevScore = scoreByUserId[prevPlayer.userId];
+            
+            if (currentScore !== prevScore) {
+                currentRank = i + 1;
+            }
+        }
+        
+        out[player.userId] = currentRank;
+    }
+    
     return out;
 }
 
