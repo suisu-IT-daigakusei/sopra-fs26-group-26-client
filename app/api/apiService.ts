@@ -4,13 +4,37 @@ import { ApplicationError } from "@/types/error";
 export class ApiService {
   private baseURL: string;
   private defaultHeaders: HeadersInit;
+  private inFlightGetRequests: Map<string, Promise<unknown>>;
 
   constructor() {
     this.baseURL = getApiDomain(); // Klasse die backend URL holt, damit Frontend weiss wohin es die Requests schicken soll
-    this.defaultHeaders = {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    };
+    this.defaultHeaders = {};
+    this.inFlightGetRequests = new Map<string, Promise<unknown>>();
+  }
+
+  private buildGetRequestKey(endpoint: string, token?: string): string {
+    const normalizedToken = String(token ?? "").trim();
+    return `GET:${this.baseURL}${endpoint}:${normalizedToken}`;
+  }
+
+  private async runDedupedGetRequest<T>(
+    requestKey: string,
+    requestFactory: () => Promise<T>,
+  ): Promise<T> {
+    const existing = this.inFlightGetRequests.get(requestKey) as Promise<T> | undefined;
+    if (existing) {
+      return existing;
+    }
+
+    const pendingRequest = requestFactory().finally(() => {
+      const current = this.inFlightGetRequests.get(requestKey);
+      if (current === pendingRequest) {
+        this.inFlightGetRequests.delete(requestKey);
+      }
+    });
+
+    this.inFlightGetRequests.set(requestKey, pendingRequest as Promise<unknown>);
+    return pendingRequest;
   }
 
   /**
@@ -68,15 +92,21 @@ export class ApiService {
 
   // schickt GET Request ans backend um verschiedene User Profile zu holen. Cache disabled to make redirect no break in case of outdated token etc.
   public async get<T>(endpoint: string): Promise<T> {
-    const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
-      method: "GET",
-      cache: "no-store",
-      headers: this.defaultHeaders,
-    });
-    return this.processResponse<T>(
-      res,
-      "An error occurred while fetching the data.\n",
+    const requestKey = this.buildGetRequestKey(endpoint);
+    return this.runDedupedGetRequest<T>(
+      requestKey,
+      async () => {
+        const url = `${this.baseURL}${endpoint}`;
+        const res = await fetch(url, {
+          method: "GET",
+          cache: "no-store",
+          headers: this.defaultHeaders,
+        });
+        return this.processResponse<T>(
+          res,
+          "An error occurred while fetching the data.\n",
+        );
+      },
     );
   }
 
@@ -92,7 +122,10 @@ export class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const res = await fetch(url, {
       method: "POST",
-      headers: this.defaultHeaders,
+      headers: {
+        ...this.defaultHeaders,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(data),
     });
     return this.processResponse<T>(
@@ -113,7 +146,10 @@ export class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const res = await fetch(url, {
       method: "PUT",
-      headers: this.defaultHeaders,
+      headers: {
+        ...this.defaultHeaders,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify(data),
     });
     return this.processResponse<T>(
@@ -139,9 +175,10 @@ export class ApiService {
     );
   }
 
-  private authHeaders(token: string): HeadersInit {
+  private authHeaders(token: string, includeJsonContentType: boolean = false): HeadersInit {
     return {
       ...this.defaultHeaders,
+      ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
       Authorization: token,
     };
   }
@@ -169,21 +206,27 @@ export class ApiService {
   }
 
   public async getWithAuth<T>(endpoint: string, token: string): Promise<T> {
-    const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
-      method: "GET",
-      cache: "no-store", // Cache disabled to make redirect no break in case of outdated token etc.
-      headers: this.authHeaders(token),
-    });
-    try {
-      return await this.processResponse<T>(
-        res,
-        "An error occurred while fetching the data.\n",
-      );
-    } catch (error) {
-      this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
-      throw error;
-    }
+    const requestKey = this.buildGetRequestKey(endpoint, token);
+    return this.runDedupedGetRequest<T>(
+      requestKey,
+      async () => {
+        const url = `${this.baseURL}${endpoint}`;
+        const res = await fetch(url, {
+          method: "GET",
+          cache: "no-store", // Cache disabled to make redirect no break in case of outdated token etc.
+          headers: this.authHeaders(token),
+        });
+        try {
+          return await this.processResponse<T>(
+            res,
+            "An error occurred while fetching the data.\n",
+          );
+        } catch (error) {
+          this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
+          throw error;
+        }
+      },
+    );
   }
 
   public async postWithAuth<T>(
@@ -194,7 +237,7 @@ export class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const res = await fetch(url, {
       method: "POST",
-      headers: this.authHeaders(token),
+      headers: this.authHeaders(token, true),
       body: JSON.stringify(data),
     });
     try {
@@ -216,7 +259,7 @@ export class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const res = await fetch(url, {
       method: "PUT",
-      headers: this.authHeaders(token),
+      headers: this.authHeaders(token, true),
       body: JSON.stringify(data),
     });
     try {
@@ -238,7 +281,7 @@ export class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const res = await fetch(url, {
       method: "PATCH",
-      headers: this.authHeaders(token),
+      headers: this.authHeaders(token, true),
       body: JSON.stringify(data),
     });
     try {

@@ -66,6 +66,15 @@ const CHARACTER_IDS = new Set<string>(USER_PROFILE_CHARACTER_OPTIONS.map((entry)
 const PRIMARY_COLOR_IDS = new Set<string>(USER_PRIMARY_COLOR_OPTIONS.map((entry) => entry.id));
 const PRIORITY_COLOR_IDS = new Set<string>(USER_PRIORITY_COLOR_OPTIONS);
 const LEGACY_COLOR_ALIASES: Record<string, string> = {
+  color01: "navy_blue",
+  color02: "light_blue",
+  color03: "dark_green",
+  color04: "light_green",
+  color05: "yellow",
+  color06: "orange",
+  color07: "red",
+  color08: "pink",
+  color09: "purple",
   black: "navy_blue",
   blue: "navy_blue",
   green: "light_green",
@@ -83,6 +92,14 @@ const LEGACY_COLOR_ALIASES: Record<string, string> = {
 
 function normalizeValue(raw: unknown): string {
   return String(raw ?? "").trim().toLowerCase();
+}
+
+function normalizePreferredColorIdEntry(raw: unknown): string {
+  let normalized = normalizeValue(raw);
+  if (LEGACY_COLOR_ALIASES[normalized]) {
+    normalized = LEGACY_COLOR_ALIASES[normalized];
+  }
+  return PRIORITY_COLOR_IDS.has(normalized) ? normalized : "";
 }
 
 export function normalizeCharacterId(raw: unknown): string {
@@ -231,10 +248,7 @@ export function normalizePreferredColorPriority(raw: unknown): string[] {
     if (normalizedChoices.length >= USER_PRIORITY_LABELS.length) {
       break;
     }
-    let normalized = normalizeValue(entry);
-    if (LEGACY_COLOR_ALIASES[normalized]) {
-      normalized = LEGACY_COLOR_ALIASES[normalized];
-    }
+    const normalized = normalizePreferredColorIdEntry(entry);
     if (!PRIORITY_COLOR_IDS.has(normalized) || usedColors.has(normalized)) {
       continue;
     }
@@ -253,6 +267,60 @@ export function normalizePreferredColorPriority(raw: unknown): string[] {
   return normalizedChoices.slice(0, USER_PRIORITY_LABELS.length);
 }
 
+export function getFirstPreferredCharacterColorId(raw: unknown): string {
+  if (!Array.isArray(raw)) {
+    return "";
+  }
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const normalized = normalizePreferredColorIdEntry(entry);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return "";
+}
+
+export function parseStoredPreferredColorPriority(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return normalizePreferredColorPriority(raw);
+  }
+
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (Array.isArray(parsed)) {
+      return normalizePreferredColorPriority(parsed);
+    }
+    if (typeof parsed === "string") {
+      const nestedText = parsed.trim();
+      if (!nestedText) {
+        return [];
+      }
+      try {
+        const nestedParsed = JSON.parse(nestedText) as unknown;
+        if (Array.isArray(nestedParsed)) {
+          return normalizePreferredColorPriority(nestedParsed);
+        }
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export function isDefaultPreferredColorPriority(raw: unknown): boolean {
+  const normalized = normalizePreferredColorPriority(raw);
+  return USER_DEFAULT_PRIORITY_COLORS.every((colorId, index) => normalized[index] === colorId);
+}
+
 export function hasDuplicatePriorityColors(choices: string[]): boolean {
   const seen = new Set<string>();
   for (const choice of choices) {
@@ -266,21 +334,23 @@ export function hasDuplicatePriorityColors(choices: string[]): boolean {
 
 export function resolveCharacterColorId(
   preferredColorPriority: unknown,
-  fallbackPrimaryColorId: unknown,
 ): string {
-  const normalizedPreferred = normalizePreferredColorPriority(preferredColorPriority);
-  if (normalizedPreferred.length > 0) {
-    return normalizedPreferred[0];
+  const explicitPreferred = getFirstPreferredCharacterColorId(preferredColorPriority);
+  if (explicitPreferred) {
+    return explicitPreferred;
   }
-  return normalizePrimaryColorId(fallbackPrimaryColorId);
+  const normalizedPreferred = normalizePreferredColorPriority(preferredColorPriority);
+  return normalizedPreferred[0] ?? USER_DEFAULT_PRIORITY_COLORS[0];
 }
 
 export function getCharacterProfileImageSrc(characterId: unknown): string {
   const normalized = normalizeCharacterId(characterId);
-  if (normalized === "char03") {
-    return "/char03_waving_1.png";
-  }
   return `/${normalized}_profile.png`;
+}
+
+export function getCharacterProfileBlinkImageSrc(characterId: unknown): string {
+  const normalized = normalizeCharacterId(characterId);
+  return `/${normalized}_profile_blink.png`;
 }
 
 export function getCharacterWavingImageSrc(characterId: unknown, frame: number): string {
@@ -290,20 +360,24 @@ export function getCharacterWavingImageSrc(characterId: unknown, frame: number):
 }
 
 export function getCharacterWavingFrameMax(characterId: unknown): number {
+  normalizeCharacterId(characterId);
+  return 9;
+}
+
+export function getCharacterCelebrationImageSrc(characterId: unknown, frame: number): string {
   const normalized = normalizeCharacterId(characterId);
-  if (normalized === "char01") {
-    return 9;
-  }
-  return 5;
+  const clampedFrame = Math.max(1, Math.min(getCharacterCelebrationFrameMax(normalized), Math.floor(frame)));
+  return `/${normalized}_celebration_${clampedFrame}.png`;
+}
+
+export function getCharacterCelebrationFrameMax(characterId: unknown): number {
+  normalizeCharacterId(characterId);
+  return 7;
 }
 
 export function getCharacterThumbsupImageSrc(characterId: unknown, frame: number): string {
   const normalized = normalizeCharacterId(characterId);
-  if (normalized !== "char01") {
-    return getCharacterProfileImageSrc(normalized);
-  }
-
   const rounded = Math.floor(Number(frame));
   const normalizedFrame = rounded === 9 ? 9 : Math.max(1, Math.min(3, rounded));
-  return `/char01_thumbsup_${normalizedFrame}.png`;
+  return `/${normalized}_thumbsup_${normalizedFrame}.png`;
 }

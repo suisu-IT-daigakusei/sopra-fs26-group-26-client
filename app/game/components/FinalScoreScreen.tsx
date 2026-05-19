@@ -30,6 +30,7 @@ interface FinalScoreScreenProps {
     chatSessionId?: string | null;
     chatToken?: string | null;
     chatUserId?: string | number | null;
+    chatUserPrimaryColorById?: Record<string, string>;
     chatCooldownSeconds?: number;
     totalRounds?: number | null;
     rematchCountdownSeconds: number;
@@ -157,6 +158,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     chatSessionId,
     chatToken,
     chatUserId,
+    chatUserPrimaryColorById,
     chatCooldownSeconds = 3,
     totalRounds,
     rematchCountdownSeconds,
@@ -554,6 +556,7 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                                 sessionId={normalizedChatSessionId}
                                 token={normalizedChatToken}
                                 userId={normalizedChatUserId}
+                                userPrimaryColorById={chatUserPrimaryColorById}
                                 cooldownSeconds={chatCooldownSeconds}
                                 variant="game"
                                 className="final-score-chat-panel"

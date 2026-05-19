@@ -30,6 +30,7 @@ const LOGIN_FRAMES: string[] = [
 ];
 
 const GENERAL_INTRO_FRAMES: string[] = [
+  "/general_loading_00a.png",
   "/general_loading_00b.png",
 ];
 
@@ -181,13 +182,13 @@ export default function AuthRouteLoadingOverlay() {
     if (stage === "generalIntro") {
       const isLastIntroFrame = generalIntroFrameIndex >= GENERAL_INTRO_FRAMES.length - 1;
       const timeoutId = window.setTimeout(() => {
-        if (transitionSatisfied) {
-          completeTransition();
+        if (!isLastIntroFrame) {
+          setGeneralIntroFrameIndex((current) => Math.min(current + 1, GENERAL_INTRO_FRAMES.length - 1));
           return;
         }
 
-        if (!isLastIntroFrame) {
-          setGeneralIntroFrameIndex((current) => Math.min(current + 1, GENERAL_INTRO_FRAMES.length - 1));
+        if (transitionSatisfied) {
+          completeTransition();
           return;
         }
 

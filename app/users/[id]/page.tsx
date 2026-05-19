@@ -638,7 +638,9 @@ const UserProfilePage: React.FC = () => {
       setLoading(true);
       setProfileLoadError(null);
       try {
-        const fetched = await apiService.get<User>(`/users/${encodeURIComponent(viewedUserId)}`);
+        const fetched = authToken
+          ? await apiService.getWithAuth<User>(`/users/${encodeURIComponent(viewedUserId)}`, authToken)
+          : await apiService.get<User>(`/users/${encodeURIComponent(viewedUserId)}`);
         if (!active) {
           return;
         }
@@ -661,7 +663,7 @@ const UserProfilePage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [apiService, viewedUserId, router]);
+  }, [apiService, authToken, viewedUserId, router]);
 
   useEffect(() => {
     let active = true;
@@ -1158,7 +1160,8 @@ const UserProfilePage: React.FC = () => {
                   <div className="profile-hero-avatar-wrap" aria-hidden="true">
                     <CharacterAvatar
                       characterId={user?.profileCharacterId}
-                      primaryColorId={resolveCharacterColorId(user?.preferredColorPriority, user?.primaryColorId)}
+                      primaryColorId={resolveCharacterColorId(user?.preferredColorPriority)}
+                      autoBlink
                       alt=""
                       width={156}
                       height={156}

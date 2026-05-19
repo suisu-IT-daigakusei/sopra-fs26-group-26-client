@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import CharacterAvatar from "@/components/CharacterAvatar";
 import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
+import GameTutorial from "@/components/GameTutorial";
 import { useApi } from "@/hooks/useApi";
 import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
 import {
@@ -21,12 +22,18 @@ import { Client } from "@stomp/stompjs";
 import SockJS from "sockjs-client";
 import type { User } from "@/types/user";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import Scores from "./components/Scores";
 import FinalScoreScreen from "./components/FinalScoreScreen";
 import {
+    USER_DEFAULT_PRIORITY_COLORS,
+    getCharacterCelebrationFrameMax,
     getCharacterWavingFrameMax,
+    getPrimaryColorHex,
+    isDefaultPreferredColorPriority,
     normalizeCharacterId,
     normalizePrimaryColorId,
+    parseStoredPreferredColorPriority,
 } from "@/utils/userSettings";
 import { resolveConfirmationTimeoutSeconds, showTimedConfirmation } from "@/utils/timedConfirmation";
 
@@ -123,6 +130,7 @@ type WaitingLobbyPlayerRow = {
     username?: string | null;
     profileCharacterId?: string | null;
     characterColorId?: string | null;
+    primaryColorId?: string | null;
 };
 
 type WaitingLobbySnapshot = {
@@ -229,6 +237,10 @@ function formatPointsLabel(score: number | null | undefined): string {
     }
     const normalized = Math.trunc(score);
     return normalized === 1 ? "1 pt" : `${normalized} pts`;
+}
+
+function getCaboRevealSpriteSrc(frame: number): string {
+    return `/cabo_reveal_${String(frame).padStart(2, "0")}.png`;
 }
 
 function normalizeValue(value: unknown): string {
@@ -528,6 +540,33 @@ function extractPlayerCardsById(value: unknown): Record<number, SeatCardView[]> 
     return byId;
 }
 
+function extractPlayerPresentationById(value: unknown): Record<number, {
+    username?: string;
+    profileCharacterId?: string;
+    characterColorId?: string;
+}> {
+    const byId: Record<number, { username?: string; profileCharacterId?: string; characterColorId?: string }> = {};
+    for (const playerRecord of extractGameStatePlayers(value)) {
+        const rawId = playerRecord.userId ?? playerRecord.id;
+        const parsedId = Number(rawId);
+        if (!Number.isFinite(parsedId)) {
+            continue;
+        }
+
+        const username = String(playerRecord.username ?? playerRecord.name ?? "").trim();
+        const profileCharacterId = String(playerRecord.profileCharacterId ?? "").trim();
+        const characterColorId = String(playerRecord.characterColorId ?? "").trim();
+
+        byId[parsedId] = {
+            username: username || undefined,
+            profileCharacterId: profileCharacterId || undefined,
+            characterColorId: characterColorId || undefined,
+        };
+    }
+
+    return byId;
+}
+
 function extractTouchedHandIndicesByPlayerId(value: unknown): Record<number, number[]> {
     const touchedById: Record<number, number[]> = {};
     for (const playerRecord of extractGameStatePlayers(value)) {
@@ -754,6 +793,30 @@ function toPlainRecord(value: unknown): Record<string, unknown> | null {
 function toFiniteScore(value: unknown): number | null {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasCaboZeroCombo(cardPointValues: Array<number | null>): boolean {
+    if (cardPointValues.length !== 4 || cardPointValues.some((value) => value == null)) {
+        return false;
+    }
+
+    let countTwelve = 0;
+    let countThirteen = 0;
+
+    for (const value of cardPointValues) {
+        const normalized = Math.trunc(Number(value));
+        if (normalized === 12) {
+            countTwelve += 1;
+            continue;
+        }
+        if (normalized === 13) {
+            countThirteen += 1;
+            continue;
+        }
+        return false;
+    }
+
+    return countTwelve === 2 && countThirteen === 2;
 }
 
 function toNumericUserId(value: unknown): number | null {
@@ -1106,10 +1169,8 @@ const Game = () => {
   const lobbySessionId = activeLobbySessionId.trim();
   const isSpectatorMode = spectatorMode.trim() === "1";
   const { value: token } = useLocalStorage<string>("token", "");
+  const { value: storedPreferredColorPriorityRaw } = useLocalStorage<string[] | string>("preferredColorPriority", []);
   const HAND_SIZE = 4; // referencing here, keeps it consistent and less prone to errors
-  const HOW_TO_PLAY_PANEL_DEFAULT_WIDTH = 360;
-  const HOW_TO_PLAY_PANEL_MARGIN = 14;
-  const HOW_TO_PLAY_PANEL_DEFAULT_TOP = 18;
   const TURN_CARD_DRAG_MIME = "application/x-cabo-turn-card";
   const DISCARD_PILE_SWAP_DRAG_MIME = "application/x-cabo-discard-pile-swap";
   const FLYING_CARD_ANIMATION_MS = 3000; // slower
@@ -1146,6 +1207,51 @@ const Game = () => {
 
       // 1st we get userID out of local storage
       const { value: userId } = useLocalStorage<string>("userId", "");
+      const normalizedUserId = String(userId ?? "").trim();
+
+      useEffect(() => {
+          const uid = normalizedUserId;
+          const authToken = token.trim();
+          if (!uid || !authToken) {
+              return;
+          }
+          const storedPreferred = parseStoredPreferredColorPriority(storedPreferredColorPriorityRaw);
+          const storedLooksCustom =
+              storedPreferred.length > 0 &&
+              USER_DEFAULT_PRIORITY_COLORS.some((colorId, index) => storedPreferred[index] !== colorId);
+          if (!storedLooksCustom) {
+              return;
+          }
+
+          let active = true;
+          void apiService.getWithAuth<User>(`/users/${encodeURIComponent(uid)}`, authToken)
+              .then((fetchedUser) => {
+                  if (!active) {
+                      return;
+                  }
+                  const serverHasPreferred =
+                      Array.isArray(fetchedUser?.preferredColorPriority) &&
+                      fetchedUser.preferredColorPriority.length > 0;
+                  const serverLooksDefault = isDefaultPreferredColorPriority(fetchedUser?.preferredColorPriority);
+                  if (serverHasPreferred && !serverLooksDefault) {
+                      return;
+                  }
+                  void apiService.putWithAuth<void>(
+                      `/users/${encodeURIComponent(uid)}`,
+                      { preferredColorPriority: storedPreferred },
+                      authToken,
+                  ).catch(() => {
+                      // best-effort profile sync only
+                  });
+              })
+              .catch(() => {
+                  // best-effort profile sync only
+              });
+
+          return () => {
+              active = false;
+          };
+      }, [apiService, normalizedUserId, storedPreferredColorPriorityRaw, token]);
 
       // #15: track wich bottom cards are faced up during the peekphase
       const [peekVisibleCards, setPeekVisibleCards] = useState<boolean[]>(createHiddenPeekCards);
@@ -1190,7 +1296,6 @@ const Game = () => {
       const [abilitySwapDurationSeconds, setAbilitySwapDurationSeconds] =
           useState<number>(DEFAULT_ABILITY_SWAP_SECONDS);
       const [isHowToPlayOpen, setIsHowToPlayOpen] = useState<boolean>(false);
-      const [howToPlayPanelPosition, setHowToPlayPanelPosition] = useState<{ x: number; y: number } | null>(null);
       const [isAbilityRevealWindow, setIsAbilityRevealWindow] = useState<boolean>(false);
       const [isCaboCalledGlobal, setIsCaboCalledGlobal] = useState<boolean>(false);
       const [isCaboForcedByTimeoutGlobal, setIsCaboForcedByTimeoutGlobal] = useState<boolean>(false);
@@ -1225,19 +1330,9 @@ const Game = () => {
       const discardRevealTimeoutRef = useRef<number | null>(null);
       const abilityPeekHideTimeoutRef = useRef<number | null>(null);
       const discardTopOverrideTimeoutRef = useRef<number | null>(null);
-      const howToPlayPanelRef = useRef<HTMLDivElement | null>(null);
-      const howToPlayPanelDragRef = useRef<{
-          active: boolean;
-          pointerId: number | null;
-          offsetX: number;
-          offsetY: number;
-      }>({
-          active: false,
-          pointerId: null,
-          offsetX: 0,
-          offsetY: 0,
-      });
       const pendingRemoteDrawAnimationRef = useRef<PendingRemoteDrawAnimation | null>(null);
+      const pendingPlayerProfileLookupUserIdsRef = useRef<Set<number>>(new Set());
+      const resolvedPlayerProfileLookupUserIdsRef = useRef<Set<number>>(new Set());
       const drawnCardPresentRef = useRef<boolean>(false);
       const playerCardsByIdRef = useRef<Record<number, SeatCardView[]>>({});
       const discardTopCardRef = useRef<Card | null>(null);
@@ -1341,137 +1436,6 @@ const Game = () => {
           ? parsedSelfUserId
           : null;
 
-      const clampHowToPlayPanelPosition = useCallback(
-          (x: number, y: number, panelWidth: number, panelHeight: number) => {
-              if (typeof window === "undefined") {
-                  return { x, y };
-              }
-              const minX = HOW_TO_PLAY_PANEL_MARGIN;
-              const minY = HOW_TO_PLAY_PANEL_MARGIN;
-              const maxX = Math.max(minX, window.innerWidth - panelWidth - HOW_TO_PLAY_PANEL_MARGIN);
-              const maxY = Math.max(minY, window.innerHeight - panelHeight - HOW_TO_PLAY_PANEL_MARGIN);
-              return {
-                  x: Math.min(Math.max(x, minX), maxX),
-                  y: Math.min(Math.max(y, minY), maxY),
-              };
-          },
-          [HOW_TO_PLAY_PANEL_MARGIN],
-      );
-
-      const ensureHowToPlayPanelPosition = useCallback(() => {
-          if (typeof window === "undefined") {
-              return;
-          }
-          setHowToPlayPanelPosition((previous) => {
-              const panel = howToPlayPanelRef.current;
-              const panelWidth = panel?.offsetWidth ?? HOW_TO_PLAY_PANEL_DEFAULT_WIDTH;
-              const panelHeight = panel?.offsetHeight ?? 340;
-              const defaultX = window.innerWidth - panelWidth - HOW_TO_PLAY_PANEL_MARGIN;
-              const defaultY = HOW_TO_PLAY_PANEL_DEFAULT_TOP;
-              const source = previous ?? { x: defaultX, y: defaultY };
-              return clampHowToPlayPanelPosition(source.x, source.y, panelWidth, panelHeight);
-          });
-      }, [
-          HOW_TO_PLAY_PANEL_DEFAULT_TOP,
-          HOW_TO_PLAY_PANEL_DEFAULT_WIDTH,
-          HOW_TO_PLAY_PANEL_MARGIN,
-          clampHowToPlayPanelPosition,
-      ]);
-
-      const handleHowToPlayDragStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-          if (event.button !== 0) {
-              return;
-          }
-          const panel = howToPlayPanelRef.current;
-          if (!panel) {
-              return;
-          }
-          const panelRect = panel.getBoundingClientRect();
-          howToPlayPanelDragRef.current = {
-              active: true,
-              pointerId: event.pointerId,
-              offsetX: event.clientX - panelRect.left,
-              offsetY: event.clientY - panelRect.top,
-          };
-          event.preventDefault();
-      }, []);
-
-      useEffect(() => {
-          if (!isHowToPlayOpen) {
-              howToPlayPanelDragRef.current.active = false;
-              howToPlayPanelDragRef.current.pointerId = null;
-              return;
-          }
-          const frameId = window.requestAnimationFrame(() => {
-              ensureHowToPlayPanelPosition();
-          });
-          return () => {
-              window.cancelAnimationFrame(frameId);
-          };
-      }, [ensureHowToPlayPanelPosition, isHowToPlayOpen]);
-
-      useEffect(() => {
-          if (!isHowToPlayOpen) {
-              return;
-          }
-
-          const handlePointerMove = (event: PointerEvent) => {
-              const dragState = howToPlayPanelDragRef.current;
-              if (!dragState.active) {
-                  return;
-              }
-              if (dragState.pointerId !== null && event.pointerId !== dragState.pointerId) {
-                  return;
-              }
-              const panel = howToPlayPanelRef.current;
-              const panelWidth = panel?.offsetWidth ?? HOW_TO_PLAY_PANEL_DEFAULT_WIDTH;
-              const panelHeight = panel?.offsetHeight ?? 340;
-              const rawX = event.clientX - dragState.offsetX;
-              const rawY = event.clientY - dragState.offsetY;
-              setHowToPlayPanelPosition(
-                  clampHowToPlayPanelPosition(rawX, rawY, panelWidth, panelHeight),
-              );
-          };
-
-          const stopDragging = (event: PointerEvent) => {
-              const dragState = howToPlayPanelDragRef.current;
-              if (!dragState.active) {
-                  return;
-              }
-              if (dragState.pointerId !== null && event.pointerId !== dragState.pointerId) {
-                  return;
-              }
-              howToPlayPanelDragRef.current.active = false;
-              howToPlayPanelDragRef.current.pointerId = null;
-          };
-
-          window.addEventListener("pointermove", handlePointerMove);
-          window.addEventListener("pointerup", stopDragging);
-          window.addEventListener("pointercancel", stopDragging);
-          return () => {
-              window.removeEventListener("pointermove", handlePointerMove);
-              window.removeEventListener("pointerup", stopDragging);
-              window.removeEventListener("pointercancel", stopDragging);
-          };
-      }, [
-          HOW_TO_PLAY_PANEL_DEFAULT_WIDTH,
-          clampHowToPlayPanelPosition,
-          isHowToPlayOpen,
-      ]);
-
-      useEffect(() => {
-          if (!isHowToPlayOpen) {
-              return;
-          }
-          const handleResize = () => {
-              ensureHowToPlayPanelPosition();
-          };
-          window.addEventListener("resize", handleResize);
-          return () => {
-              window.removeEventListener("resize", handleResize);
-          };
-      }, [ensureHowToPlayPanelPosition, isHowToPlayOpen]);
-
       useEffect(() => {
           const authToken = token.trim();
           const sessionCode = lobbySessionId.trim();
@@ -1520,7 +1484,11 @@ const Game = () => {
                           if (!Number.isFinite(parsedUserId)) {
                               continue;
                           }
-                          next[parsedUserId] = normalizeCharacterId(row?.profileCharacterId);
+                          const rawProfileCharacterId = String(row?.profileCharacterId ?? "").trim();
+                          if (!rawProfileCharacterId) {
+                              continue;
+                          }
+                          next[parsedUserId] = normalizeCharacterId(rawProfileCharacterId);
                       }
                       return next;
                   });
@@ -1550,6 +1518,11 @@ const Game = () => {
               active = false;
           };
       }, [apiService, lobbySessionId, token]);
+
+      useEffect(() => {
+          pendingPlayerProfileLookupUserIdsRef.current.clear();
+          resolvedPlayerProfileLookupUserIdsRef.current.clear();
+      }, [lobbySessionId, token]);
 
       useEffect(() => {
           if (gameStatus !== "" || gameStatusSnapshotForCurrentGame === "") {
@@ -2069,6 +2042,53 @@ const Game = () => {
                                   arraysEqual(previous, nextPlayerIds) ? previous : nextPlayerIds
                               );
                           }
+                          const nextPlayerPresentationById = extractPlayerPresentationById(payload);
+                          if (Object.keys(nextPlayerPresentationById).length > 0) {
+                              setPlayerNamesById((previous) => {
+                                  const next = { ...previous };
+                                  for (const [rawUserId, presentation] of Object.entries(nextPlayerPresentationById)) {
+                                      const parsedUserId = Number(rawUserId);
+                                      if (!Number.isFinite(parsedUserId)) {
+                                          continue;
+                                      }
+                                      const username = String(presentation.username ?? "").trim();
+                                      if (!isPlaceholderPlayerName(username)) {
+                                          next[parsedUserId] = username;
+                                      }
+                                  }
+                                  return next;
+                              });
+                              setPlayerCharacterById((previous) => {
+                                  const next = { ...previous };
+                                  for (const [rawUserId, presentation] of Object.entries(nextPlayerPresentationById)) {
+                                      const parsedUserId = Number(rawUserId);
+                                      if (!Number.isFinite(parsedUserId)) {
+                                          continue;
+                                      }
+                                      const profileCharacterId = String(presentation.profileCharacterId ?? "").trim();
+                                      if (!profileCharacterId) {
+                                          continue;
+                                      }
+                                      next[parsedUserId] = normalizeCharacterId(profileCharacterId);
+                                  }
+                                  return next;
+                              });
+                              setPlayerPrimaryColorById((previous) => {
+                                  const next = { ...previous };
+                                  for (const [rawUserId, presentation] of Object.entries(nextPlayerPresentationById)) {
+                                      const parsedUserId = Number(rawUserId);
+                                      if (!Number.isFinite(parsedUserId)) {
+                                          continue;
+                                      }
+                                      const characterColorId = String(presentation.characterColorId ?? "").trim();
+                                      if (!characterColorId) {
+                                          continue;
+                                      }
+                                      next[parsedUserId] = normalizePrimaryColorId(characterColorId);
+                                  }
+                                  return next;
+                              });
+                          }
 
                           const previousPlayerCardsById = playerCardsByIdRef.current;
                           const previousDiscardTopCard = discardTopCardRef.current;
@@ -2381,8 +2401,6 @@ const Game = () => {
           if (!authToken) {
               return;
           }
-          const canUseProfileColorFallback = !lobbySessionId.trim();
-
           const candidateIds = [...tablePlayerIds];
           finalScores.forEach((entry) => {
               if (!candidateIds.includes(entry.userId)) {
@@ -2390,19 +2408,23 @@ const Game = () => {
               }
           });
 
-          const missingIds = candidateIds.filter(
-              (id) =>
+          const lookupIds = candidateIds.filter((id) => (
+              Number.isFinite(id) &&
+              (
                   isPlaceholderPlayerName(playerNamesById[id]) ||
-                  !playerCharacterById[id] ||
-                  (canUseProfileColorFallback && !playerPrimaryColorById[id])
-          );
-          if (missingIds.length === 0) {
+                  !playerCharacterById[id]
+              ) &&
+              !pendingPlayerProfileLookupUserIdsRef.current.has(id) &&
+              !resolvedPlayerProfileLookupUserIdsRef.current.has(id)
+          ));
+          if (lookupIds.length === 0) {
               return;
           }
 
+          lookupIds.forEach((id) => pendingPlayerProfileLookupUserIdsRef.current.add(id));
           let active = true;
           void Promise.all(
-              missingIds.map(async (id) => {
+              lookupIds.map(async (id) => {
                   try {
                       const fetchedUser = await apiService.getWithAuth<User>(
                           `/users/${encodeURIComponent(String(id))}`,
@@ -2412,10 +2434,9 @@ const Game = () => {
                           fetchedUser?.username ?? fetchedUser?.name ?? ""
                       ).trim();
                       const profileCharacterId = normalizeCharacterId(fetchedUser?.profileCharacterId);
-                      const primaryColorId = normalizePrimaryColorId(fetchedUser?.primaryColorId);
-                      return [id, displayName, profileCharacterId, primaryColorId] as const;
+                      return [id, displayName, profileCharacterId] as const;
                   } catch {
-                      return [id, "", "", ""] as const;
+                      return [id, "", ""] as const;
                   }
               })
           ).then((entries) => {
@@ -2440,24 +2461,17 @@ const Game = () => {
                   }
                   return next;
               });
-              setPlayerPrimaryColorById((previous) => {
-                  if (!canUseProfileColorFallback) {
-                      return previous;
-                  }
-                  const next = { ...previous };
-                  for (const [id, , , primaryColorId] of entries) {
-                      if (primaryColorId) {
-                          next[id] = primaryColorId;
-                      }
-                  }
-                  return next;
+          }).finally(() => {
+              lookupIds.forEach((id) => {
+                  pendingPlayerProfileLookupUserIdsRef.current.delete(id);
+                  resolvedPlayerProfileLookupUserIdsRef.current.add(id);
               });
           });
 
           return () => {
               active = false;
           };
-      }, [apiService, finalScores, lobbySessionId, playerCharacterById, playerNamesById, playerPrimaryColorById, tablePlayerIds, token]);
+      }, [apiService, finalScores, lobbySessionId, playerCharacterById, playerNamesById, tablePlayerIds, token]);
 
       const refreshSessionScoresFromSessionState = useCallback(async () => {
           const authToken = token.trim();
@@ -4230,6 +4244,30 @@ const scoreModalPlayers = useMemo(() => {
     });
 }, [participantFinalScores, playerNamesById, tablePlayerIds]);
 
+const chatPrimaryColorByUserId = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    for (const [rawUserId, rawColorId] of Object.entries(playerPrimaryColorById)) {
+        const normalizedUserId = String(rawUserId ?? "").trim();
+        const normalizedColorId = String(rawColorId ?? "").trim();
+        if (!normalizedUserId || !normalizedColorId) {
+            continue;
+        }
+        mapping[normalizedUserId] = normalizePrimaryColorId(normalizedColorId);
+    }
+    return mapping;
+}, [playerPrimaryColorById]);
+
+const resolvePlayerNameStyle = useCallback((playerId: number | null | undefined): React.CSSProperties | undefined => {
+    if (playerId == null || !Number.isFinite(playerId)) {
+        return undefined;
+    }
+    const colorId = String(playerPrimaryColorById[playerId] ?? "").trim();
+    if (!colorId) {
+        return undefined;
+    }
+    return { color: getPrimaryColorHex(colorId) };
+}, [playerPrimaryColorById]);
+
 const canonicalCaboRevealOrderIds = useMemo(() => {
     const serverOrderedIds = Array.from(
         new Set(
@@ -4299,6 +4337,14 @@ const CABO_REVEAL_POINT_FADE_MS = 500;
 const CABO_REVEAL_TOTAL_FADE_MS = 500;
 const CABO_REVEAL_WINNER_CELEBRATION_MS = 6000;
 const CABO_REVEAL_WINNER_FADE_MS = 500;
+const CABO_REVEAL_WINNER_CELEBRATION_SPEED_MULTIPLIER = 5;
+const CABO_REVEAL_IDLE_BLINK_CYCLE_MS = 2400;
+const CABO_REVEAL_IDLE_BLINK_CLOSED_MS = 150;
+const CABO_REVEAL_SEQUENCE_FRAME_MIN_HOLD_MS = 90;
+const CABO_REVEAL_SEQUENCE_FRAME_MAX_HOLD_MS = 220;
+const CABO_REVEAL_STAGE_EDGE_FADE_MS = 240;
+const CABO_REVEAL_POST_FLIP_DELAY_MS = 2000;
+const CABO_REVEAL_POST_FLIP_QUICK_FRAME_HOLD_MS = 130;
 
 const visibleIntroPlayersCount = useMemo(() => {
     if (introElapsedMs < INTRO_TITLE_DURATION_MS) {
@@ -4363,23 +4409,28 @@ const caboRevealPlayers = useMemo(() => {
             ? toFiniteScore(roundScores[roundScores.length - 1])
             : null;
         const totalScore = toFiniteScore(scoreEntry?.totalScore);
-        const hasEveryCardValue = cards.every((card) => Number.isFinite(Number(card.value)));
-        const cardValueSum = hasEveryCardValue
-            ? cards.reduce((sum, card) => sum + Number(card.value), 0)
-            : null;
-        // Displayed equation total should always follow visible card values when available.
-        const displayRoundScore = cardValueSum ?? lastRoundScore ?? totalScore;
-        // Winner selection still follows backend round-score resolution first (special rules).
-        const pointsToReveal = lastRoundScore ?? cardValueSum ?? totalScore;
-        const roundScoreText = displayRoundScore == null
-            ? "-"
-            : String(Math.trunc(displayRoundScore));
         const cardPointValues = cards.map((card) => {
             const parsed = toFiniteScore(card.value);
             return parsed == null ? null : Math.trunc(parsed);
         });
-        const cardPointsTotal = cardPointValues.every((value) => value != null)
+        const cardValueSum = cardPointValues.every((value) => value != null)
             ? cardPointValues.reduce((sum, value) => sum + Number(value), 0)
+            : null;
+        const isCaboZeroSpecial = hasCaboZeroCombo(cardPointValues);
+        const resolvedRoundScore = isCaboZeroSpecial
+            ? 0
+            : (cardValueSum ?? lastRoundScore ?? totalScore);
+        // Displayed equation total should always follow visible card values when available.
+        const displayRoundScore = resolvedRoundScore;
+        // Winner resolution must stay aligned with displayed round score.
+        const pointsToReveal = displayRoundScore;
+        const roundScoreText = displayRoundScore == null
+            ? "-"
+            : String(Math.trunc(displayRoundScore));
+        const cardPointsTotal = cardPointValues.every((value) => value != null)
+            ? (isCaboZeroSpecial
+                ? 0
+                : cardPointValues.reduce((sum, value) => sum + Number(value), 0))
             : null;
         const cardPointsTotalText = cardPointsTotal == null
             ? "-"
@@ -4400,7 +4451,8 @@ const caboRevealPlayers = useMemo(() => {
             cardPointValues,
             cardPointsTotalText,
             roundScoreLabel: formatPointsLabel(displayRoundScore),
-            isSpecialWin: scoreEntry?.isSpecialWin === true,
+            isSpecialWin: scoreEntry?.isSpecialWin === true || isCaboZeroSpecial,
+            isCaboZeroSpecial,
         };
     });
 }, [HAND_SIZE, canonicalCaboRevealOrderIds, participantFinalScores, playerCardsById, playerNamesById]);
@@ -4624,7 +4676,144 @@ const caboRevealWinnerOpacity = caboRevealIsWinnerStage
         return 1;
     })()
     : 0;
-const caboRevealPlaceholderFrame = 1 + (Math.floor(caboRevealElapsedClampedMs / 110) % 9);
+const caboRevealResolveIdleBlinkFrame = (
+    elapsedMs: number,
+    idleFrame: number,
+    blinkFrame: number,
+): number => {
+    if (blinkFrame === idleFrame) {
+        return idleFrame;
+    }
+    const cycleMs = Math.max(CABO_REVEAL_IDLE_BLINK_CLOSED_MS + 1, CABO_REVEAL_IDLE_BLINK_CYCLE_MS);
+    const clampedElapsedMs = Math.max(0, elapsedMs);
+    const cycleOffsetMs = clampedElapsedMs % cycleMs;
+    return cycleOffsetMs >= (cycleMs - CABO_REVEAL_IDLE_BLINK_CLOSED_MS)
+        ? blinkFrame
+        : idleFrame;
+};
+const caboRevealResolveOneShotThenIdleFrame = (
+    elapsedMs: number,
+    phaseDurationMs: number,
+    firstFrame: number,
+    lastFrame: number,
+    idleFrame: number,
+    blinkFrame: number,
+): number => {
+    const sequenceLength = Math.max(1, (lastFrame - firstFrame) + 1);
+    const phaseMs = Math.max(0, phaseDurationMs);
+    const suggestedFrameHoldMs = phaseMs > 0 ? Math.floor(phaseMs / (sequenceLength + 2)) : 0;
+    const frameHoldMs = Math.max(
+        CABO_REVEAL_SEQUENCE_FRAME_MIN_HOLD_MS,
+        Math.min(
+            CABO_REVEAL_SEQUENCE_FRAME_MAX_HOLD_MS,
+            suggestedFrameHoldMs > 0 ? suggestedFrameHoldMs : CABO_REVEAL_SEQUENCE_FRAME_MIN_HOLD_MS,
+        ),
+    );
+    const oneShotDurationMs = sequenceLength * frameHoldMs;
+    const clampedElapsedMs = Math.max(0, elapsedMs);
+    if (clampedElapsedMs < oneShotDurationMs) {
+        const frameOffset = Math.min(sequenceLength - 1, Math.floor(clampedElapsedMs / frameHoldMs));
+        return firstFrame + frameOffset;
+    }
+    return caboRevealResolveIdleBlinkFrame(
+        clampedElapsedMs - oneShotDurationMs,
+        idleFrame,
+        blinkFrame,
+    );
+};
+const caboRevealPlayerStageTotalMs = Math.max(
+    1,
+    caboRevealTimeline.playersEndMs - caboRevealTimeline.openingEndMs,
+);
+const caboRevealAnimationSlotOpacity = caboRevealIsPlayerStage
+    ? (() => {
+        const fadeMs = Math.max(1, Math.min(CABO_REVEAL_STAGE_EDGE_FADE_MS, caboRevealPlayerStageTotalMs / 2));
+        if (caboRevealPlayerStageElapsedMs < fadeMs) {
+            return clamp01(caboRevealPlayerStageElapsedMs / fadeMs);
+        }
+        const fadeOutStartMs = caboRevealPlayerStageTotalMs - fadeMs;
+        if (caboRevealPlayerStageElapsedMs >= fadeOutStartMs) {
+            return clamp01((caboRevealPlayerStageTotalMs - caboRevealPlayerStageElapsedMs) / fadeMs);
+        }
+        return 1;
+    })()
+    : 0;
+const caboRevealPreFlipFrameSet = caboRevealActivePlayerIndex === 0
+    ? {
+        firstFrame: 1,
+        lastFrame: 6,
+        idleFrame: 6,
+        blinkFrame: 9,
+    }
+    : {
+        firstFrame: 20,
+        lastFrame: 22,
+        idleFrame: 22,
+        blinkFrame: 29,
+    };
+const caboRevealIsLastPlayerInReveal = caboRevealActivePlayerIndex === Math.max(0, caboRevealTimeline.playerCount - 1);
+const caboRevealPreFlipFrame = caboRevealResolveOneShotThenIdleFrame(
+    caboRevealActivePlayerElapsedMs,
+    caboRevealCardRevealStartMs,
+    caboRevealPreFlipFrameSet.firstFrame,
+    caboRevealPreFlipFrameSet.lastFrame,
+    caboRevealPreFlipFrameSet.idleFrame,
+    caboRevealPreFlipFrameSet.blinkFrame,
+);
+const caboRevealPostFlipElapsedMs = Math.max(
+    0,
+    caboRevealActivePlayerElapsedMs - caboRevealCardRevealEndMs,
+);
+const caboRevealPostFlipQuickTotalMs = CABO_REVEAL_POST_FLIP_QUICK_FRAME_HOLD_MS * 2;
+const caboRevealFadeEdgeMs = Math.max(1, Math.min(CABO_REVEAL_STAGE_EDGE_FADE_MS, caboRevealPlayerStageTotalMs / 2));
+const caboRevealIsFinalFadeWindow = caboRevealIsLastPlayerInReveal &&
+    caboRevealActivePlayerElapsedMs >= Math.max(0, caboRevealTimeline.perPlayerTotalMs - caboRevealFadeEdgeMs);
+const caboRevealPlayerAnimationFrame = (() => {
+    if (caboRevealIsFinalFadeWindow) {
+        return caboRevealPreFlipFrameSet.idleFrame;
+    }
+
+    if (caboRevealIsLastPlayerInReveal) {
+        return caboRevealPreFlipFrame;
+    }
+
+    if (caboRevealPostFlipElapsedMs < CABO_REVEAL_POST_FLIP_DELAY_MS) {
+        return caboRevealPreFlipFrame;
+    }
+
+    const quickElapsedMs = caboRevealPostFlipElapsedMs - CABO_REVEAL_POST_FLIP_DELAY_MS;
+    if (quickElapsedMs < caboRevealPostFlipQuickTotalMs) {
+        return quickElapsedMs < CABO_REVEAL_POST_FLIP_QUICK_FRAME_HOLD_MS
+            ? 10
+            : 11;
+    }
+
+    return caboRevealResolveIdleBlinkFrame(
+        quickElapsedMs - caboRevealPostFlipQuickTotalMs,
+        11,
+        19,
+    );
+})();
+const caboRevealPlayerAnimationSrc = getCaboRevealSpriteSrc(caboRevealPlayerAnimationFrame);
+const caboRevealWinnerCelebrationFrameMax = getCharacterCelebrationFrameMax("char01");
+const caboRevealWinnerCelebrationFrameStepMs = Math.max(
+    1,
+    caboRevealTimeline.winnerCelebrationMs /
+        (caboRevealWinnerCelebrationFrameMax * CABO_REVEAL_WINNER_CELEBRATION_SPEED_MULTIPLIER),
+);
+const caboRevealWinnerCelebrationFrame = caboRevealIsWinnerStage
+    ? Math.min(
+        caboRevealWinnerCelebrationFrameMax,
+        1 + Math.floor(caboRevealWinnerStageElapsedMs / caboRevealWinnerCelebrationFrameStepMs),
+    )
+    : 1;
+const caboRevealWinnerCelebrationPlayers = useMemo(() => (
+    (caboRevealWinner?.winnerCards ?? []).map((winner) => ({
+        ...winner,
+        characterId: normalizeCharacterId(playerCharacterById[winner.userId]),
+        primaryColorId: normalizePrimaryColorId(playerPrimaryColorById[winner.userId]),
+    }))
+), [caboRevealWinner, playerCharacterById, playerPrimaryColorById]);
 
 useLayoutEffect(() => {
     if (!isCaboRevealPhase || !caboRevealIsPlayerStage) {
@@ -4858,14 +5047,17 @@ if (isIntroPhase) {
                             waveFrameMax,
                             1 + Math.floor(elapsedSinceRevealMs / INTRO_WAVE_FRAME_DURATION_MS),
                         );
+                        const shouldSwitchToProfileBlink =
+                            elapsedSinceRevealMs >= (INTRO_WAVE_FRAME_DURATION_MS * waveFrameMax);
                         return (
                             <div key={player.userId} className="game-intro-player-card">
                                 <div className="game-intro-player-avatar" aria-hidden="true">
                                     <CharacterAvatar
                                         characterId={playerCharacterById[player.userId]}
                                         primaryColorId={playerPrimaryColorById[player.userId]}
-                                        variant="waving"
+                                        variant={shouldSwitchToProfileBlink ? "profile" : "waving"}
                                         frame={waveFrame}
+                                        autoBlink={shouldSwitchToProfileBlink}
                                         alt=""
                                         width={160}
                                         height={160}
@@ -4889,7 +5081,13 @@ if (isCaboRevealPhase) {
     const shouldShowSpecialFireworks =
         caboRevealIsPlayerStage &&
         caboRevealActivePlayer?.isSpecialWin === true &&
+        caboRevealActivePlayer?.isCaboZeroSpecial !== true &&
         caboRevealVisiblePointCount > 0;
+    const shouldShowCaboZeroEquation =
+        !(caboRevealIsPlayerStage && caboRevealActivePlayer?.isCaboZeroSpecial === true);
+    const shouldShowCaboRevealCountdown =
+        !(caboRevealIsPlayerStage && caboRevealActivePlayer?.isCaboZeroSpecial === true);
+    const specialRevealLabel = "Special win!";
 
     return (
         <div className="cabo-background cabo-background-game">
@@ -4922,16 +5120,18 @@ if (isCaboRevealPhase) {
                             </p>
                         </div>
 
-                        <div className="game-cabo-reveal-animation-slot" aria-hidden="true">
+                        <div
+                            className="game-cabo-reveal-animation-slot"
+                            aria-hidden="true"
+                            style={{ opacity: caboRevealAnimationSlotOpacity }}
+                        >
                             <div className="game-cabo-reveal-placeholder-avatar">
-                                <CharacterAvatar
-                                    characterId="char01"
-                                    primaryColorId="color01"
-                                    variant="waving"
-                                    frame={caboRevealPlaceholderFrame}
+                                <Image
+                                    src={caboRevealPlayerAnimationSrc}
                                     alt=""
                                     width={200}
                                     height={200}
+                                    unoptimized
                                     className="game-cabo-reveal-placeholder-avatar-image"
                                 />
                             </div>
@@ -4959,32 +5159,36 @@ if (isCaboRevealPhase) {
                             ))}
                         </div>
 
-                        <div className="game-cabo-reveal-points-grid-row" aria-label="Round score equation" style={{ opacity: caboRevealPointsRowOpacity }}>
-                            {caboRevealActivePlayer.cardPointValues.map((cardLabel, index) => (
-                                <span
-                                    key={`${caboRevealActivePlayer.userId}-eq-${index}`}
-                                    className="game-cabo-reveal-points-term"
-                                    style={{
-                                        gridColumn: `${(index * 2) + 1}`,
-                                        opacity: caboRevealPointOpacities[index] ?? 0,
-                                    }}
-                                >
-                                    {index < caboRevealVisiblePointCount
-                                        ? (cardLabel == null ? "?" : String(cardLabel))
-                                        : "\u00a0"}
-                                </span>
-                            ))}
-                        </div>
+                        {shouldShowCaboZeroEquation && (
+                            <>
+                                <div className="game-cabo-reveal-points-grid-row" aria-label="Round score equation" style={{ opacity: caboRevealPointsRowOpacity }}>
+                                    {caboRevealActivePlayer.cardPointValues.map((cardLabel, index) => (
+                                        <span
+                                            key={`${caboRevealActivePlayer.userId}-eq-${index}`}
+                                            className="game-cabo-reveal-points-term"
+                                            style={{
+                                                gridColumn: `${(index * 2) + 1}`,
+                                                opacity: caboRevealPointOpacities[index] ?? 0,
+                                            }}
+                                        >
+                                            {index < caboRevealVisiblePointCount
+                                                ? (cardLabel == null ? "?" : String(cardLabel))
+                                                : "\u00a0"}
+                                        </span>
+                                    ))}
+                                </div>
 
-                        <p className="game-cabo-reveal-points-result" style={{ opacity: caboRevealTotalOpacity }}>
-                            = {caboRevealActivePlayer.cardPointsTotalText}
-                        </p>
+                                <p className="game-cabo-reveal-points-result" style={{ opacity: caboRevealTotalOpacity }}>
+                                    = {caboRevealActivePlayer.cardPointsTotalText}
+                                </p>
+                            </>
+                        )}
 
                         <div className="game-cabo-reveal-special-cell">
                             {shouldShowSpecialFireworks && (
                                 <>
                                     <div className="game-cabo-reveal-fireworks" aria-hidden="true" />
-                                    <p className="game-cabo-reveal-special-text">Special win!</p>
+                                    <p className="game-cabo-reveal-special-text">{specialRevealLabel}</p>
                                 </>
                             )}
                         </div>
@@ -4998,18 +5202,35 @@ if (isCaboRevealPhase) {
                             {caboRevealWinner?.winnerNamesLabel ?? "Waiting for result"}
                         </h2>
                         <div className="game-cabo-reveal-winner-animation" aria-hidden="true">
-                            <div className="game-cabo-reveal-placeholder-avatar">
-                                <CharacterAvatar
-                                    characterId="char01"
-                                    primaryColorId="color01"
-                                    variant="waving"
-                                    frame={caboRevealPlaceholderFrame}
-                                    alt=""
-                                    width={300}
-                                    height={300}
-                                    className="game-cabo-reveal-placeholder-avatar-image"
-                                />
-                            </div>
+                            {caboRevealWinnerCelebrationPlayers.length > 0 ? (
+                                caboRevealWinnerCelebrationPlayers.map((winner) => (
+                                    <div key={`winner-avatar-${winner.userId}`} className="game-cabo-reveal-placeholder-avatar">
+                                        <CharacterAvatar
+                                            characterId={winner.characterId}
+                                            primaryColorId={winner.primaryColorId}
+                                            variant="celebration"
+                                            frame={caboRevealWinnerCelebrationFrame}
+                                            alt=""
+                                            width={300}
+                                            height={300}
+                                            className="game-cabo-reveal-placeholder-avatar-image"
+                                        />
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="game-cabo-reveal-placeholder-avatar">
+                                    <CharacterAvatar
+                                        characterId="char01"
+                                        primaryColorId="color01"
+                                        variant="celebration"
+                                        frame={caboRevealWinnerCelebrationFrame}
+                                        alt=""
+                                        width={300}
+                                        height={300}
+                                        className="game-cabo-reveal-placeholder-avatar-image"
+                                    />
+                                </div>
+                            )}
                         </div>
                         {caboRevealWinner?.winnerCards && caboRevealWinner.winnerCards.length > 0 && (
                             <div className="game-cabo-reveal-winner-cards-list" aria-label="Winning hand cards">
@@ -5035,9 +5256,11 @@ if (isCaboRevealPhase) {
                         )}
                     </div>
                 )}
-                <div className="game-cabo-reveal-global-countdown">
-                    {displayedCaboRevealCountdown}s
-                </div>
+                {shouldShowCaboRevealCountdown && (
+                    <div className="game-cabo-reveal-global-countdown">
+                        {displayedCaboRevealCountdown}s
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -5055,6 +5278,7 @@ const playerListRows = tablePlayerIds.map((id) => {
               label,
               isActive,
               isTimedOut,
+              nameStyle: resolvePlayerNameStyle(id),
           };
       });
 
@@ -5083,7 +5307,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                                               key={player.id}
                                               className={`game-player-list-item${player.isActive ? " active" : ""}${player.isTimedOut ? " timedout" : ""}`}
                                           >
-                                              <span>{player.label}</span>
+                                              <span style={player.nameStyle}>{player.label}</span>
                                               {player.isActive && showTurnCountdown && (
                                                   <span className="game-player-list-timer">{displayedTurnTimeLeft}s</span>
                                               )}
@@ -5139,6 +5363,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                                                   currentTurnUserId === seatAssignments.topOpponentId ? " active" : ""
                                               }`}
                                               title={playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
+                                              style={resolvePlayerNameStyle(seatAssignments.topOpponentId)}
                                           >
                                               {playerNamesById[seatAssignments.topOpponentId] ?? `Player ${seatAssignments.topOpponentId}`}
                                           </div>
@@ -5148,21 +5373,7 @@ const playerListRows = tablePlayerIds.map((id) => {
 
                               <section className="game-layout-zone game-table-cell game-table-cell-top-right" aria-label="Game actions">
                                   <div className="top-right-buttons">
-                                      <Button
-                                          onClick={() => {
-                                              if (typeof window !== "undefined") {
-                                                  const defaultX = Math.max(
-                                                      HOW_TO_PLAY_PANEL_MARGIN,
-                                                      window.innerWidth - HOW_TO_PLAY_PANEL_DEFAULT_WIDTH - HOW_TO_PLAY_PANEL_MARGIN,
-                                                  );
-                                                  setHowToPlayPanelPosition({
-                                                      x: defaultX,
-                                                      y: HOW_TO_PLAY_PANEL_DEFAULT_TOP,
-                                                  });
-                                              }
-                                              setIsHowToPlayOpen(true);
-                                          }}
-                                      >
+                                      <Button onClick={() => setIsHowToPlayOpen(true)}>
                                           How to Play
                                       </Button>
                                       <Button onClick={() => void handleShowScores()}>Scores</Button>
@@ -5230,6 +5441,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                                                   currentTurnUserId === seatAssignments.leftOpponentId ? " active" : ""
                                               }`}
                                               title={playerNamesById[seatAssignments.leftOpponentId] ?? `Player ${seatAssignments.leftOpponentId}`}
+                                              style={resolvePlayerNameStyle(seatAssignments.leftOpponentId)}
                                           >
                                               {playerNamesById[seatAssignments.leftOpponentId] ?? `Player ${seatAssignments.leftOpponentId}`}
                                           </div>
@@ -5443,6 +5655,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                                                   currentTurnUserId === seatAssignments.rightOpponentId ? " active" : ""
                                               }`}
                                               title={playerNamesById[seatAssignments.rightOpponentId] ?? `Player ${seatAssignments.rightOpponentId}`}
+                                              style={resolvePlayerNameStyle(seatAssignments.rightOpponentId)}
                                           >
                                               {playerNamesById[seatAssignments.rightOpponentId] ?? `Player ${seatAssignments.rightOpponentId}`}
                                           </div>
@@ -5457,6 +5670,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                                               sessionId={lobbySessionId}
                                               token={token}
                                               userId={userId}
+                                              userPrimaryColorById={chatPrimaryColorByUserId}
                                               cooldownSeconds={chatCooldownSeconds}
                                               variant="game"
                                               className="game-corner-chat-panel"
@@ -5471,7 +5685,11 @@ const playerListRows = tablePlayerIds.map((id) => {
                               >
                                   <div className="game-bottom-seat-stack">
                                       {isSpectatorMode && spectatorBottomPlayerLabel ? (
-                                          <div className="game-opponent-seat-name game-spectator-bottom-seat-name" title={spectatorBottomPlayerLabel}>
+                                          <div
+                                              className="game-opponent-seat-name game-spectator-bottom-seat-name"
+                                              title={spectatorBottomPlayerLabel}
+                                              style={resolvePlayerNameStyle(viewerSeatPlayerId)}
+                                          >
                                               {spectatorBottomPlayerLabel}
                                           </div>
                                       ) : null}
@@ -5685,39 +5903,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                     selfUserId={selfUserId}
                     totalRounds={finalScoreTotalRounds}
                   />
-                  {isHowToPlayOpen && (
-                      <div
-                          ref={howToPlayPanelRef}
-                          className="game-how-to-play-panel"
-                          style={{
-                              left: `${Math.round(howToPlayPanelPosition?.x ?? 0)}px`,
-                              top: `${Math.round(howToPlayPanelPosition?.y ?? 0)}px`,
-                          }}
-                          role="dialog"
-                          aria-label="How to Play"
-                      >
-                          <div
-                              className="game-how-to-play-panel-header"
-                              onPointerDown={handleHowToPlayDragStart}
-                              title="Drag to move"
-                          >
-                              <span className="game-how-to-play-panel-title">How to Play</span>
-                              <Button
-                                  type="primary"
-                                  size="small"
-                                  onClick={() => setIsHowToPlayOpen(false)}
-                              >
-                                  Close
-                              </Button>
-                          </div>
-                          <div className="game-how-to-play-panel-body">
-                              <p>Goal: finish with the lowest total score after all rounds.</p>
-                              <p>Turn flow: draw a card, then either swap it with one of your cards or discard it.</p>
-                              <p>Ability cards: 7/8 peek your own card, 9/10 spy an opponent card, 11/12 swap.</p>
-                              <p>Call Cabo when you think your hand is low. Others get one final turn.</p>
-                          </div>
-                      </div>
-                  )}
+                  <GameTutorial isOpen={isHowToPlayOpen} onClose={() => setIsHowToPlayOpen(false)} />
                   {/* #34: Final Score Screen */}
                   <FinalScoreScreen
                       isOpen={isRematchScreenPhase}
@@ -5726,6 +5912,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                       chatSessionId={lobbySessionId}
                       chatToken={token}
                       chatUserId={userId}
+                      chatUserPrimaryColorById={chatPrimaryColorByUserId}
                       chatCooldownSeconds={chatCooldownSeconds}
                       totalRounds={finalScoreTotalRounds}
                       rematchCountdownSeconds={displayedRematchCountdown}

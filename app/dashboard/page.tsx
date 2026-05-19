@@ -12,7 +12,12 @@ import { User } from "@/types/user";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { deriveUserOutcomeStatsFromHistoryPayload } from "@/utils/userHistoryStats";
-import { resolveCharacterColorId } from "@/utils/userSettings";
+import {
+  USER_DEFAULT_PRIORITY_COLORS,
+  isDefaultPreferredColorPriority,
+  parseStoredPreferredColorPriority,
+  resolveCharacterColorId,
+} from "@/utils/userSettings";
 import { Button, Card } from "antd";
 import GameTutorialModal from "@/components/GameTutorial";
 
@@ -24,6 +29,7 @@ type FriendOnlineSummary = {
   lobby: number;
   spectating: number;
 };
+type FriendSummaryStatusFilter = "playing" | "lobby" | "spectating";
 
 const GREETINGS_BY_TIME_SLOT: Record<GreetingSlot, string[]> = {
   morning: [
@@ -89,6 +95,8 @@ function DashboardContent() {
 
   const { value: userId, clear: clearUserId } = useLocalStorage<string>("userId", "");
   const { value: token, clear: clearToken } = useLocalStorage<string>("token", "");
+  const { set: setSpectatorMode } = useLocalStorage<string>("spectatorMode", "");
+  const { value: storedPreferredColorPriorityRaw } = useLocalStorage<string[] | string>("preferredColorPriority", []);
   const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
   const normalizedToken = typeof token === "string" ? token.trim() : "";
   const liveConnected = useApiConnectionStatus(normalizedUserId, normalizedToken);
@@ -120,8 +128,29 @@ function DashboardContent() {
           `/users/${encodeURIComponent(normalizedUserId)}`,
           normalizedToken,
         );
+        const storedPreferred = parseStoredPreferredColorPriority(storedPreferredColorPriorityRaw);
+        const storedLooksCustom =
+          storedPreferred.length > 0 &&
+          USER_DEFAULT_PRIORITY_COLORS.some((colorId, index) => storedPreferred[index] !== colorId);
+        const serverHasPreferred =
+          Array.isArray(fetchedUser?.preferredColorPriority) &&
+          fetchedUser.preferredColorPriority.length > 0;
+        const serverLooksDefault = isDefaultPreferredColorPriority(fetchedUser?.preferredColorPriority);
+        const shouldApplyStoredPreferred = storedLooksCustom && (!serverHasPreferred || serverLooksDefault);
+        const resolvedUser = shouldApplyStoredPreferred
+          ? { ...fetchedUser, preferredColorPriority: storedPreferred }
+          : fetchedUser;
         if (active) {
-          setUser(fetchedUser);
+          setUser(resolvedUser);
+        }
+        if (shouldApplyStoredPreferred) {
+          void apiService.putWithAuth<void>(
+            `/users/${encodeURIComponent(normalizedUserId)}`,
+            { preferredColorPriority: storedPreferred },
+            normalizedToken,
+          ).catch(() => {
+            // keep UI preference locally; backend will be retried on next save/load cycle
+          });
         }
       } catch (error) {
         const status = (error as { status?: number })?.status;
@@ -142,7 +171,7 @@ function DashboardContent() {
     return () => {
       active = false;
     };
-  }, [apiService, normalizedUserId, normalizedToken, router, clearToken, clearUserId]);
+  }, [apiService, normalizedUserId, normalizedToken, router, clearToken, clearUserId, storedPreferredColorPriorityRaw]);
 
   useEffect(() => {
     if (!normalizedUserId || !normalizedToken) {
@@ -291,6 +320,15 @@ function DashboardContent() {
   const friendOnlineLabel = friendOnlineSummary.friendsOnline === 1
     ? "Friend Online"
     : "Friends Online";
+  const navigateToUsersFromFriendSummary = (statusFilter?: FriendSummaryStatusFilter) => {
+    const nextParams = new URLSearchParams();
+    nextParams.set("summary", "1");
+    nextParams.set("friendsOnly", "1");
+    if (statusFilter) {
+      nextParams.set("status", statusFilter);
+    }
+    router.push(`/users?${nextParams.toString()}`);
+  };
 
   return (
     <div className="cabo-background">
@@ -305,16 +343,68 @@ function DashboardContent() {
                 </span>
                 <div className="dashboard-friends-summary-row">
                   <span className="dashboard-friends-summary-line">
-                    <span className="users-status-pill users-status-online dashboard-friends-summary-pill">
+                    <span
+                      className="users-status-pill users-status-online dashboard-friends-summary-pill users-status-pill-action"
+                      role="button"
+                      tabIndex={0}
+                      title="Show online friends in Users"
+                      onClick={() => navigateToUsersFromFriendSummary()}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigateToUsersFromFriendSummary();
+                      }}
+                    >
                       <strong>{friendOnlineSummary.friendsOnline}</strong>&nbsp;{friendOnlineLabel}
                     </span>
-                    <span className="users-status-pill users-status-playing dashboard-friends-summary-pill">
+                    <span
+                      className="users-status-pill users-status-playing dashboard-friends-summary-pill users-status-pill-action"
+                      role="button"
+                      tabIndex={0}
+                      title="Show friends currently playing"
+                      onClick={() => navigateToUsersFromFriendSummary("playing")}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigateToUsersFromFriendSummary("playing");
+                      }}
+                    >
                       <strong>{friendOnlineSummary.playing}</strong>&nbsp;Playing
                     </span>
-                    <span className="users-status-pill users-status-lobby dashboard-friends-summary-pill">
+                    <span
+                      className="users-status-pill users-status-lobby dashboard-friends-summary-pill users-status-pill-action"
+                      role="button"
+                      tabIndex={0}
+                      title="Show friends currently in a lobby"
+                      onClick={() => navigateToUsersFromFriendSummary("lobby")}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigateToUsersFromFriendSummary("lobby");
+                      }}
+                    >
                       <strong>{friendOnlineSummary.lobby}</strong>&nbsp;in Lobby
                     </span>
-                    <span className="users-status-pill users-status-spectating dashboard-friends-summary-pill">
+                    <span
+                      className="users-status-pill users-status-spectating dashboard-friends-summary-pill users-status-pill-action"
+                      role="button"
+                      tabIndex={0}
+                      title="Show friends currently spectating"
+                      onClick={() => navigateToUsersFromFriendSummary("spectating")}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigateToUsersFromFriendSummary("spectating");
+                      }}
+                    >
                       <strong>{friendOnlineSummary.spectating}</strong>&nbsp;Spectating
                     </span>
                   </span>
@@ -332,7 +422,8 @@ function DashboardContent() {
               <div className="dashboard-profile-avatar-wrap" aria-hidden="true">
                 <CharacterAvatar
                   characterId={user?.profileCharacterId}
-                  primaryColorId={resolveCharacterColorId(user?.preferredColorPriority, user?.primaryColorId)}
+                  primaryColorId={resolveCharacterColorId(user?.preferredColorPriority)}
+                  autoBlink
                   alt=""
                   width={112}
                   height={112}
@@ -362,7 +453,13 @@ function DashboardContent() {
               <Button type="primary" onClick={() => router.push("/lobby/join")}>
                 Join a Game
               </Button>
-              <Button type="primary" onClick={() => router.push("/create_lobby")}>
+              <Button
+                type="primary"
+                onClick={() => {
+                  setSpectatorMode("");
+                  router.push("/create_lobby");
+                }}
+              >
                 Create a New Lobby
               </Button>
             </div>
@@ -397,7 +494,7 @@ function DashboardContent() {
                 How to Play
               </Button>
               <Button type="primary" onClick={() => router.push("/credits")}>
-                Help & Credits
+                Credits
               </Button>
               <Button type="primary" className="dashboard-logout-btn" onClick={() => void handleLogout()}>
                 Logout

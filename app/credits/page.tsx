@@ -33,6 +33,10 @@ const CREDIT_NAMES = [
   "Audio Sources:",
   "pixabay.com",
   "alkakrab.itch.io",
+  "",
+  "Video Sources:",
+  "Transparent Celebration Stock Videos by Vecteezy",
+  "https://www.vecteezy.com/free-videos/transparent-celebration",
 ];
 
 function toBuildInfo(value: unknown): BuildInfo {
@@ -151,32 +155,6 @@ export default function CreditsPage() {
     <div className="cabo-background">
       <div className="login-container">
         <div className="create-lobby-stack dashboard-stack">
-          <Card
-            className="dashboard-container"
-            title={<div className="dashboard-section-title">Help</div>}
-          >
-            <div className="credits-help-block">
-              <section className="credits-help-chapter">
-                <h3>How to play Cabo</h3>
-                <p>
-                  Placeholder: explain the objective, turn flow, when to call Cabo, and how round scoring works.
-                </p>
-              </section>
-              <section className="credits-help-chapter">
-                <h3>How to navigate the website</h3>
-                <p>
-                  Placeholder: describe the dashboard, lobby/game flow, profile pages, and where to find history and leaderboard.
-                </p>
-              </section>
-              <section className="credits-help-chapter">
-                <h3>Available settings</h3>
-                <p>
-                  Placeholder: document profile, graphics, sound, privacy/tutorial preferences, and password updates.
-                </p>
-              </section>
-            </div>
-          </Card>
-
           <Card
             className="dashboard-container"
             title={<div className="dashboard-section-title">Credits</div>}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const LOCAL_STORAGE_SYNC_EVENT = "local-storage-sync";
 
@@ -37,15 +37,18 @@ export default function useLocalStorage<T>(
   key: string,
   defaultValue: T,
 ): LocalStorage<T> {
+  // Keep the initial default stable so callers can safely pass literals like [] or {}.
+  const defaultValueRef = useRef<T>(defaultValue);
+
   const readStoredValue = useCallback((): T => {
     if (typeof window === "undefined") {
-      return defaultValue;
+      return defaultValueRef.current;
     }
 
     try {
       const stored = globalThis.localStorage.getItem(key);
       if (!stored) {
-        return defaultValue;
+        return defaultValueRef.current;
       }
 
       try {
@@ -56,9 +59,9 @@ export default function useLocalStorage<T>(
       }
     } catch (error) {
       console.error(`Error reading localStorage key "${key}":`, error);
-      return defaultValue;
+      return defaultValueRef.current;
     }
-  }, [defaultValue, key]);
+  }, [key]);
 
   const [value, setValue] = useState<T>(readStoredValue);
 
@@ -109,12 +112,12 @@ export default function useLocalStorage<T>(
 
   // Removes key from localStorage and resets state
   const clear = useCallback(() => {
-    setValue(defaultValue);
+    setValue(defaultValueRef.current);
     if (typeof window !== "undefined") {
       globalThis.localStorage.removeItem(key);
       dispatchLocalStorageSync(key);
     }
-  }, [defaultValue, key]);
+  }, [key]);
 
   return { value, set, clear };
 }

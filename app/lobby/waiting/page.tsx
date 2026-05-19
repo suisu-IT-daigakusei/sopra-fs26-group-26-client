@@ -22,7 +22,13 @@ import { showTimedConfirmation } from "@/utils/timedConfirmation";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
-import { getCharacterWavingFrameMax } from "@/utils/userSettings";
+import {
+  USER_DEFAULT_PRIORITY_COLORS,
+  getCharacterWavingFrameMax,
+  isDefaultPreferredColorPriority,
+  normalizePrimaryColorId,
+  parseStoredPreferredColorPriority,
+} from "@/utils/userSettings";
 import { Client } from "@stomp/stompjs";
 import { Button, Card, Checkbox, Collapse, Input, List, Slider, Spin, Switch, Typography } from "antd";
 import Link from "next/link";
@@ -404,22 +410,18 @@ function WaitingLobbyContent() {
   const api = useApi();
   const { value: token } = useLocalStorage<string>("token", "");
   const { value: userId } = useLocalStorage<string>("userId", "");
+  const { value: storedPreferredColorPriorityRaw } = useLocalStorage<string[] | string>("preferredColorPriority", []);
   const normalizedUserId = String(userId).trim();
   const lobbyApiConnected = useApiConnectionStatus(normalizedUserId, token.trim());
   const { set: setActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
   const { set: setActiveLobbySessionId } = useLocalStorage<string>("activeLobbySessionId", "");
   const { set: setPendingInitialPeekGameId } = useLocalStorage<string>("pendingInitialPeekGameId", "");
-  const { value: spectatorMode, set: setSpectatorMode } = useLocalStorage<string>("spectatorMode", "");
+  const { set: setSpectatorMode } = useLocalStorage<string>("spectatorMode", "");
   const { set: setActiveGameStatusSnapshot } = useLocalStorage<ActiveGameStatusSnapshot | null>(
     "activeGameStatusSnapshot",
     null,
   );
-  const spectatorModeFromStorage = normalizeValue(spectatorMode);
-  const isSpectatorLobbyView =
-    spectatorModeFromQuery ||
-    spectatorModeFromStorage === "1" ||
-    spectatorModeFromStorage === "true" ||
-    spectatorModeFromStorage === "yes";
+  const isSpectatorLobbyView = spectatorModeFromQuery;
   const spectatorLobbyQuerySuffix = isSpectatorLobbyView ? "?spectator=1" : "";
   const { sentEntries, loadSent, markPending } = useOutgoingInviteStatuses(
     userId,
@@ -474,6 +476,50 @@ function WaitingLobbyContent() {
   useEffect(() => {
     setSpectatorMode(isSpectatorLobbyView ? "1" : "");
   }, [isSpectatorLobbyView, setSpectatorMode]);
+
+  useEffect(() => {
+    const uid = normalizedUserId;
+    const authToken = token.trim();
+    if (!uid || !authToken) {
+      return;
+    }
+    const storedPreferred = parseStoredPreferredColorPriority(storedPreferredColorPriorityRaw);
+    const storedLooksCustom =
+      storedPreferred.length > 0 &&
+      USER_DEFAULT_PRIORITY_COLORS.some((colorId, index) => storedPreferred[index] !== colorId);
+    if (!storedLooksCustom) {
+      return;
+    }
+
+    let active = true;
+    void api.getWithAuth<User>(`/users/${encodeURIComponent(uid)}`, authToken)
+      .then((fetchedUser) => {
+        if (!active) {
+          return;
+        }
+        const serverHasPreferred =
+          Array.isArray(fetchedUser?.preferredColorPriority) &&
+          fetchedUser.preferredColorPriority.length > 0;
+        const serverLooksDefault = isDefaultPreferredColorPriority(fetchedUser?.preferredColorPriority);
+        if (serverHasPreferred && !serverLooksDefault) {
+          return;
+        }
+        void api.putWithAuth<void>(
+          `/users/${encodeURIComponent(uid)}`,
+          { preferredColorPriority: storedPreferred },
+          authToken,
+        ).catch(() => {
+          // best-effort profile sync only
+        });
+      })
+      .catch(() => {
+        // best-effort profile sync only
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [api, normalizedUserId, storedPreferredColorPriorityRaw, token]);
 
   const launchToGame = useCallback((rawGameId: unknown, rawStatus?: string, forceInitialPeekBootstrap = false) => {
     const gameId = String(rawGameId ?? "").trim();
@@ -615,6 +661,7 @@ function WaitingLobbyContent() {
     if (sessionId) {
       return;
     }
+    setSpectatorMode("");
 
     const authToken = token.trim();
     if (!authToken) {
@@ -703,7 +750,7 @@ function WaitingLobbyContent() {
     return () => {
       active = false;
     };
-  }, [api, normalizedUserId, router, sessionIdParam, token]);
+  }, [api, normalizedUserId, router, sessionIdParam, setSpectatorMode, token]);
 
   useEffect(() => {
     const authToken = token.trim();
@@ -764,7 +811,7 @@ function WaitingLobbyContent() {
             username: String(spectatorRecord?.username ?? spectator ?? "").trim(),
             joinStatus: String(spectatorRecord?.joinStatus ?? "spectator"),
             profileCharacterId: String(spectatorRecord?.profileCharacterId ?? ""),
-            characterColorId: String(spectatorRecord?.characterColorId ?? spectatorRecord?.primaryColorId ?? ""),
+            characterColorId: String(spectatorRecord?.characterColorId ?? ""),
             ready: false,
           } as WaitingRow;
         }).filter((row) => row.username.length > 0));
@@ -1034,14 +1081,17 @@ function WaitingLobbyContent() {
     () =>
       (view?.players ?? [])
         .filter((player) => String(player.username ?? "").trim().length > 0)
-        .map((player) => ({
-          userId: Number(player.userId ?? 0) || undefined,
-          username: String(player.username ?? "").trim(),
-          joinStatus: String(player.joinStatus ?? ""),
-          profileCharacterId: String(player.profileCharacterId ?? ""),
-          characterColorId: String(player.characterColorId ?? ""),
-          ready: Boolean(player.ready),
-        }))
+        .map((player) => {
+          const playerRecord = player as Record<string, unknown>;
+          return {
+            userId: Number(player.userId ?? 0) || undefined,
+            username: String(player.username ?? "").trim(),
+            joinStatus: String(player.joinStatus ?? ""),
+            profileCharacterId: String(playerRecord.profileCharacterId ?? ""),
+            characterColorId: String(playerRecord.characterColorId ?? ""),
+            ready: Boolean(player.ready),
+          };
+        })
         .slice(0, MAX_LOBBY_PLAYERS),
     [view],
   );
@@ -1181,14 +1231,14 @@ function WaitingLobbyContent() {
       if (!usernameKey) {
         continue;
       }
-      mapping[usernameKey] = String(player.profileCharacterId ?? "");
+      mapping[usernameKey] = String(player.profileCharacterId ?? "").trim();
     }
     for (const spectator of spectators) {
       const usernameKey = normalizeValue(spectator.username);
       if (!usernameKey) {
         continue;
       }
-      mapping[usernameKey] = String(spectator.profileCharacterId ?? "");
+      mapping[usernameKey] = String(spectator.profileCharacterId ?? "").trim();
     }
     return mapping;
   }, [spectators, waitingPlayers]);
@@ -1217,6 +1267,33 @@ function WaitingLobbyContent() {
     }
     return mapping;
   }, [spectators, waitingPlayers]);
+
+  const chatPrimaryColorByUserId = useMemo(() => {
+    const mapping: Record<string, string> = {};
+    const rows = [...waitingPlayers, ...spectators];
+    for (const row of rows) {
+      const parsedUserId = Number(row.userId);
+      if (!Number.isFinite(parsedUserId)) {
+        continue;
+      }
+      const usernameKey = normalizeValue(row.username);
+      const resolvedColorByUsername = usernameKey
+        ? (stableCharacterColorByUsername[usernameKey] || incomingCharacterColorByUsername[usernameKey])
+        : "";
+      const rawColorId = String(row.characterColorId ?? "").trim();
+      const effectiveColorId = resolvedColorByUsername || rawColorId;
+      if (!effectiveColorId) {
+        continue;
+      }
+      mapping[String(parsedUserId)] = normalizePrimaryColorId(effectiveColorId);
+    }
+    return mapping;
+  }, [
+    incomingCharacterColorByUsername,
+    spectators,
+    stableCharacterColorByUsername,
+    waitingPlayers,
+  ]);
 
   useEffect(() => {
     const presentUsernameKeys = new Set<string>();
@@ -2156,6 +2233,7 @@ function WaitingLobbyContent() {
                                 : avatarMode === "thumbsup"
                                   ? "thumbsup"
                                   : "profile";
+                            const shouldAutoBlink = avatarMode === "idle";
                             return (
                               <CharacterAvatar
                                 characterId={slot.profileCharacterId || characterByUsername[slot.usernameKey]}
@@ -2165,6 +2243,7 @@ function WaitingLobbyContent() {
                                 }
                                 variant={avatarVariant}
                                 frame={avatarFrame}
+                                autoBlink={shouldAutoBlink}
                                 alt=""
                                 width={56}
                                 height={56}
@@ -2285,6 +2364,7 @@ function WaitingLobbyContent() {
                                     stableCharacterColorByUsername[normalizeValue(spectator.username)] ||
                                     spectator.characterColorId
                                   }
+                                  autoBlink
                                   alt=""
                                   width={56}
                                   height={56}
@@ -2341,6 +2421,7 @@ function WaitingLobbyContent() {
                   userId={userId}
                   cooldownSeconds={lobbyTimerSettings.chatCooldownSeconds}
                   variant="lobby"
+                  userPrimaryColorById={chatPrimaryColorByUserId}
                 />
               </div>
             </Card>

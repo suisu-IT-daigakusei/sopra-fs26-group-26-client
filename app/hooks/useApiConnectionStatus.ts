@@ -25,7 +25,12 @@ export function useApiConnectionStatus(
     }
 
     let active = true;
+    let pollingInFlight = false;
     const checkConnection = async () => {
+      if (pollingInFlight) {
+        return;
+      }
+      pollingInFlight = true;
       try {
         await api.getWithAuth<unknown>(
           `/users/${encodeURIComponent(normalizedUserId)}`,
@@ -38,6 +43,8 @@ export function useApiConnectionStatus(
         if (active) {
           setConnected(false);
         }
+      } finally {
+        pollingInFlight = false;
       }
     };
 
@@ -54,4 +61,3 @@ export function useApiConnectionStatus(
 
   return connected;
 }
-

@@ -8,6 +8,7 @@ import {
   normalizeChatInputForDisplay,
   normalizeChatInputForTransport,
 } from "@/utils/chat";
+import { getPrimaryColorHex, normalizePrimaryColorId } from "@/utils/userSettings";
 import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
 import { Client } from "@stomp/stompjs";
 import { SendOutlined } from "@ant-design/icons";
@@ -22,6 +23,7 @@ type CaboChatPanelProps = {
   cooldownSeconds?: number;
   className?: string;
   variant?: "lobby" | "game";
+  userPrimaryColorById?: Record<string, string>;
 };
 
 const QUICK_EMOTES: Array<{ token: string; label: string }> = [
@@ -119,6 +121,7 @@ export default function CaboChatPanel({
   cooldownSeconds = 3,
   className = "",
   variant = "lobby",
+  userPrimaryColorById,
 }: CaboChatPanelProps) {
   const api = useApi();
   const normalizedSessionId = String(sessionId ?? "").trim();
@@ -139,6 +142,19 @@ export default function CaboChatPanel({
   const [cooldownUntilMs, setCooldownUntilMs] = useState(0);
   const [cooldownNowMs, setCooldownNowMs] = useState(Date.now());
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+
+  const usernameColorHexByUserId = useMemo(() => {
+    const entries = Object.entries(userPrimaryColorById ?? {});
+    const next: Record<string, string> = {};
+    for (const [rawUserId, rawColorId] of entries) {
+      const normalizedUserId = String(rawUserId ?? "").trim();
+      if (!normalizedUserId) {
+        continue;
+      }
+      next[normalizedUserId] = getPrimaryColorHex(normalizePrimaryColorId(rawColorId));
+    }
+    return next;
+  }, [userPrimaryColorById]);
 
   useEffect(() => {
     setEffectiveSessionId(normalizedSessionId);
@@ -420,20 +436,27 @@ export default function CaboChatPanel({
       const username = String(message.username ?? "Player").trim() || "Player";
       const text = normalizeChatInputForDisplay(String(message.text ?? ""));
       const ownMessage = normalizedUserId.length > 0 && String(message.userId ?? "") === normalizedUserId;
-      const metaLabel = `${formatMessageClock(message.sentAt)}, ${username}`;
+      const senderUserId = String(message.userId ?? "").trim();
+      const senderUsernameColor = senderUserId ? usernameColorHexByUserId[senderUserId] : undefined;
       return (
         <div
           key={`chat-message-${String(message.sequence ?? "x")}-${index}`}
           className={`cabo-chat-message${ownMessage ? " cabo-chat-message-own" : ""}`}
         >
           <p className="cabo-chat-message-line">
-            <span className="cabo-chat-message-meta">{metaLabel}</span>
+            <span className="cabo-chat-message-meta">{formatMessageClock(message.sentAt)},</span>
+            <span
+              className="cabo-chat-message-username"
+              style={senderUsernameColor ? { color: senderUsernameColor } : undefined}
+            >
+              {username}:
+            </span>
             <span className="cabo-chat-message-text">{text}</span>
           </p>
         </div>
       );
     })
-  ), [messages, normalizedUserId]);
+  ), [messages, normalizedUserId, usernameColorHexByUserId]);
 
   return (
     <div className={`cabo-chat-panel cabo-chat-panel-${variant} ${className}`.trim()}>

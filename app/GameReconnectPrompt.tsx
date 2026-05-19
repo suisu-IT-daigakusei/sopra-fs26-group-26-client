@@ -94,21 +94,30 @@ export default function GameReconnectPrompt() {
     }
 
     let active = true;
+    let pollingInFlight = false;
 
     const refresh = async () => {
-      const next = await loadSelfState();
-      if (!active || !next) {
+      if (pollingInFlight) {
         return;
       }
+      pollingInFlight = true;
+      try {
+        const next = await loadSelfState();
+        if (!active || !next) {
+          return;
+        }
 
-      const isPlaying = Boolean(next.gameId);
-      setIsPlayingOnServer(isPlaying);
+        const isPlaying = Boolean(next.gameId);
+        setIsPlayingOnServer(isPlaying);
 
-      if (next.gameId) {
-        setServerGameId(next.gameId);
-        setActiveSessionId(next.gameId);
-      } else {
-        setServerGameId("");
+        if (next.gameId) {
+          setServerGameId(next.gameId);
+          setActiveSessionId(next.gameId);
+        } else {
+          setServerGameId("");
+        }
+      } finally {
+        pollingInFlight = false;
       }
     };
 

@@ -3,7 +3,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -42,6 +42,20 @@ type UserRow = User & {
 const USERS_PAGE_SIZE = 10;
 const FRIEND_ACTION_MIN_LOADING_MS = 800;
 const FRIEND_REQUEST_STATUS_POLL_MS = 4000;
+
+function resolveSummaryStatusSearchTerm(rawStatus: unknown): string {
+  const normalized = String(rawStatus ?? "").trim().toLowerCase();
+  if (normalized === "playing") {
+    return "Playing";
+  }
+  if (normalized === "lobby" || normalized === "in lobby" || normalized === "in_lobby") {
+    return "Lobby";
+  }
+  if (normalized === "spectating") {
+    return "Spectating";
+  }
+  return "";
+}
 
 function toFiniteMetric(value: unknown): number | null {
   const parsed = Number(value);
@@ -320,6 +334,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
 
 const UsersPage: React.FC = () => {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const apiService = useApi();
   const { value: token } = useLocalStorage<string>("token", "");
   const { value: userId } = useLocalStorage<string>("userId", "");
@@ -337,6 +352,20 @@ const UsersPage: React.FC = () => {
   const [showFriendsOnlyUsers, setShowFriendsOnlyUsers] = useState(false);
   const [showFriendsOnlyLeaderboard, setShowFriendsOnlyLeaderboard] = useState(false);
   const liveConnected = useApiConnectionStatus(userId.trim(), token.trim());
+
+  useEffect(() => {
+    const isSummaryFilterNavigation = String(searchParams.get("summary") ?? "").trim() === "1";
+    if (!isSummaryFilterNavigation) {
+      return;
+    }
+
+    const friendsOnlyParam = String(searchParams.get("friendsOnly") ?? "").trim().toLowerCase();
+    const shouldShowFriendsOnly = friendsOnlyParam === "1" || friendsOnlyParam === "true";
+    const statusSearchTerm = resolveSummaryStatusSearchTerm(searchParams.get("status"));
+
+    setShowFriendsOnlyUsers(shouldShowFriendsOnly);
+    setSearchTerm(statusSearchTerm);
+  }, [searchParams]);
 
   const reconcilePendingRequests = useCallback((acceptedFriendIds: string[]) => {
     const acceptedSet = new Set(acceptedFriendIds);

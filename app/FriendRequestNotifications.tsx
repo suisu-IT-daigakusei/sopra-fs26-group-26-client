@@ -75,11 +75,17 @@ export default function FriendRequestNotifications() {
     }
 
     let active = true;
+    let pollingInFlight = false;
     const pollIncoming = async () => {
-      if (!active) {
+      if (!active || pollingInFlight) {
         return;
       }
-      await loadIncoming();
+      pollingInFlight = true;
+      try {
+        await loadIncoming();
+      } finally {
+        pollingInFlight = false;
+      }
     };
 
     void pollIncoming();
@@ -100,7 +106,7 @@ export default function FriendRequestNotifications() {
       return;
     }
     const interval = setInterval(() => {
-      setRequestAttentionFrame((prev) => (prev >= 3 ? 1 : prev + 1));
+      setRequestAttentionFrame((prev) => (prev >= 4 ? 1 : prev + 1));
     }, 400);
     return () => clearInterval(interval);
   }, [current]);
@@ -160,7 +166,7 @@ export default function FriendRequestNotifications() {
     <div className="cabo-friend-request-corner" role="status" aria-live="polite">
       <div className="cabo-friend-request-corner-main">
         <Image
-          src={`/request_attention${requestAttentionFrame}.png`}
+          src={`/request_attention_${requestAttentionFrame}.png`}
           alt="Cabo Guy"
           width={96}
           height={96}

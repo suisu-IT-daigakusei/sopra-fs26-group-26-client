@@ -2186,6 +2186,155 @@ html[data-cabo-appearance="dark"] .cabo-timed-confirm-modal {
   color: #1e2b42 !important;
 }
 
+.game-tutorial-modal {
+  --game-tutorial-surface: rgba(250, 246, 236, 0.98);
+  --game-tutorial-border: rgba(44, 52, 70, 0.22);
+  --game-tutorial-title: #1e2b42;
+  --game-tutorial-text: #1f2633;
+  --game-tutorial-muted: rgba(31, 38, 51, 0.82);
+  --game-tutorial-tab-active: var(--cabo-primary-color);
+  --game-tutorial-tab-inactive: rgba(31, 38, 51, 0.76);
+  --game-tutorial-divider: rgba(63, 74, 95, 0.24);
+}
+
+:is(html[data-cabo-appearance="light"], html.cabo-text-dark) .game-tutorial-modal {
+  --game-tutorial-surface: rgba(250, 246, 236, 0.98);
+  --game-tutorial-border: rgba(44, 52, 70, 0.22);
+  --game-tutorial-title: #1e2b42;
+  --game-tutorial-text: #1f2633;
+  --game-tutorial-muted: rgba(31, 38, 51, 0.82);
+  --game-tutorial-tab-active: var(--cabo-primary-color);
+  --game-tutorial-tab-inactive: rgba(31, 38, 51, 0.76);
+  --game-tutorial-divider: rgba(63, 74, 95, 0.24);
+}
+
+:is(html[data-cabo-appearance="dark"], html:not(.cabo-text-dark)) .game-tutorial-modal {
+  --game-tutorial-surface: rgba(18, 22, 30, 0.98);
+  --game-tutorial-border: rgba(255, 255, 255, 0.2);
+  --game-tutorial-title: #f5f8ff;
+  --game-tutorial-text: rgba(236, 241, 255, 0.96);
+  --game-tutorial-muted: rgba(216, 225, 246, 0.86);
+  --game-tutorial-tab-active: #9bc6ff;
+  --game-tutorial-tab-inactive: rgba(216, 225, 246, 0.75);
+  --game-tutorial-divider: rgba(255, 255, 255, 0.18);
+}
+
+:is(
+  .game-tutorial-modal,
+  .ant-modal-root.game-tutorial-modal,
+  .ant-modal-wrap.game-tutorial-modal,
+  .ant-modal.game-tutorial-modal
+) .ant-modal-content {
+  background: var(--game-tutorial-surface) !important;
+  border: 1px solid var(--game-tutorial-border);
+  border-radius: 12px;
+}
+
+.game-tutorial-modal .ant-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid var(--game-tutorial-divider);
+}
+
+.game-tutorial-title {
+  color: var(--game-tutorial-title);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.game-tutorial-modal .ant-modal-body,
+.game-tutorial-body {
+  color: var(--game-tutorial-text);
+}
+
+.game-tutorial-modal .ant-tabs-content-holder,
+.game-tutorial-modal .ant-tabs-content {
+  background: transparent !important;
+}
+
+.game-tutorial-tabs {
+  margin-top: 12px;
+}
+
+.game-tutorial-modal .ant-tabs-nav {
+  border-bottom: 1px solid var(--game-tutorial-divider);
+  margin-bottom: 12px;
+}
+
+.game-tutorial-modal .ant-tabs-tab .ant-tabs-tab-btn {
+  color: var(--game-tutorial-tab-inactive);
+}
+
+.game-tutorial-modal .ant-tabs-tab:hover .ant-tabs-tab-btn,
+.game-tutorial-modal .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--game-tutorial-tab-active) !important;
+}
+
+.game-tutorial-section {
+  padding: 8px 0;
+}
+
+.game-tutorial-section-scroll {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.game-tutorial-heading {
+  margin: 16px 0 8px;
+  color: inherit;
+}
+
+.game-tutorial-heading-first {
+  margin-top: 0;
+}
+
+.game-tutorial-section p,
+.game-tutorial-section li {
+  color: var(--game-tutorial-muted);
+}
+
+.game-tutorial-section strong {
+  color: var(--game-tutorial-text);
+}
+
+/* Hard overrides for dark-mode portal cases where CSS variable scopes can fail. */
+html[data-cabo-appearance="dark"] :is(
+  .game-tutorial-modal,
+  .ant-modal-root.game-tutorial-modal,
+  .ant-modal-wrap.game-tutorial-modal,
+  .ant-modal.game-tutorial-modal
+) .ant-modal-content {
+  background: rgba(18, 22, 30, 0.98) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+html[data-cabo-appearance="dark"] .game-tutorial-modal :is(
+  .ant-modal-header,
+  .ant-modal-body,
+  .ant-tabs-content-holder,
+  .ant-tabs-content
+) {
+  background: transparent !important;
+}
+
+html[data-cabo-appearance="dark"] .game-tutorial-modal :is(
+  .game-tutorial-title,
+  .game-tutorial-heading,
+  .game-tutorial-section strong
+) {
+  color: #f5f8ff !important;
+}
+
+html[data-cabo-appearance="dark"] .game-tutorial-modal :is(
+  .game-tutorial-section p,
+  .game-tutorial-section li
+) {
+  color: rgba(216, 225, 246, 0.9) !important;
+}
+
+html[data-cabo-appearance="dark"] .game-tutorial-modal .ant-tabs-tab .ant-tabs-tab-btn {
+  color: rgba(216, 225, 246, 0.75) !important;
+}
+
 .cabo-inline-confirm,
 .final-score-confirm-modal {
     background: rgba(30, 30, 40, 0.97);
@@ -3361,6 +3510,18 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   margin-right: 6px;
 }
 
+.cabo-chat-message-username {
+  display: inline;
+  font-size: 11px;
+  font-weight: 700;
+  color: #c9d6ee;
+  margin-right: 6px;
+}
+
+.cabo-chat-message-own .cabo-chat-message-username {
+  color: #ffd6ac;
+}
+
 .cabo-chat-message-text {
   display: inline;
   font-size: 13px;
@@ -3583,6 +3744,7 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 }
 
 .game-corner-chat-panel .cabo-chat-message-meta,
+.game-corner-chat-panel .cabo-chat-message-username,
 .game-corner-chat-panel .cabo-chat-message-text {
   line-height: inherit;
   white-space: normal;
@@ -3591,6 +3753,10 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 }
 
 .game-corner-chat-panel .cabo-chat-message-meta {
+  font-size: clamp(8px, 1.15vh, 10px);
+}
+
+.game-corner-chat-panel .cabo-chat-message-username {
   font-size: clamp(8px, 1.15vh, 10px);
 }
 
@@ -5017,20 +5183,18 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 
 .game-cabo-reveal-winner-animation {
   margin: 14px auto 0;
-  width: min(100%, clamp(180px, 34vw, 320px), 38svh);
-  max-width: 100%;
-  aspect-ratio: 1 / 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 18px;
+  gap: clamp(10px, 1.6vw, 18px);
+  flex-wrap: wrap;
 }
 
 .game-cabo-reveal-winner-animation .game-cabo-reveal-placeholder-avatar {
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
+  width: min(clamp(170px, 28vw, 300px), 36svh);
+  max-width: min(92vw, 36svh);
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
 }
 
 .game-cabo-reveal-winner-points {

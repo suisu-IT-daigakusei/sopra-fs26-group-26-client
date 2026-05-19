@@ -18,6 +18,7 @@ import {
   USER_DEFAULT_MUSIC_VOLUME,
   USER_DEFAULT_APPEARANCE_MODE,
   USER_DEFAULT_PRIMARY_COLOR_ID,
+  USER_DEFAULT_PRIORITY_COLORS,
   USER_DEFAULT_SOUND_EFFECTS_VOLUME,
   USER_APPEARANCE_OPTIONS,
   USER_PRIMARY_COLOR_OPTIONS,
@@ -27,12 +28,14 @@ import {
   appearanceModeToStorageValue,
   backgroundFileToCssUrl,
   hasDuplicatePriorityColors,
+  isDefaultPreferredColorPriority,
   normalizeCharacterId,
   normalizeAppearanceMode,
   normalizeMusicBlacklist,
   normalizePreferredColorPriority,
   normalizePrimaryColorId,
   normalizeVolume,
+  parseStoredPreferredColorPriority,
   resolveEffectiveAppearance,
   resolveBackgroundFile,
 } from "@/utils/userSettings";
@@ -155,6 +158,7 @@ const MENU_BACKGROUND_STORAGE_KEY = "menuBackgroundAsset";
 const GAME_BACKGROUND_STORAGE_KEY = "gameBackgroundAsset";
 const PRIMARY_COLOR_STORAGE_KEY = "primaryColorId";
 const APPEARANCE_STORAGE_KEY = "appearanceMode";
+const PREFERRED_COLOR_PRIORITY_STORAGE_KEY = "preferredColorPriority";
 
 const SettingsPage = () => {
   const router = useRouter();
@@ -214,6 +218,13 @@ const SettingsPage = () => {
   const { set: setStoredAppearanceMode } = useLocalStorage<string>(
     APPEARANCE_STORAGE_KEY,
     USER_DEFAULT_APPEARANCE_MODE,
+  );
+  const {
+    value: storedPreferredColorPriorityRaw,
+    set: setStoredPreferredColorPriorityRaw,
+  } = useLocalStorage<string[] | string>(
+    PREFERRED_COLOR_PRIORITY_STORAGE_KEY,
+    normalizePreferredColorPriority(null),
   );
   const skipUnsavedGuardRef = useRef(false);
   const passwordValue = Form.useWatch("password", form);
@@ -351,9 +362,36 @@ const SettingsPage = () => {
         setSelectedCharacter(nextCharacter);
         setSavedCharacter(nextCharacter);
 
-        const nextPriority = normalizePreferredColorPriority(fetchedUser?.preferredColorPriority);
+        const nextPrimaryColorId = normalizePrimaryColorId(fetchedUser?.primaryColorId);
+        const normalizedPriorityFromServer = normalizePreferredColorPriority(fetchedUser?.preferredColorPriority);
+        const normalizedPriorityFromLocal = parseStoredPreferredColorPriority(storedPreferredColorPriorityRaw);
+        const localLooksCustom =
+          normalizedPriorityFromLocal.length > 0 &&
+          USER_DEFAULT_PRIORITY_COLORS.some((colorId, index) => normalizedPriorityFromLocal[index] !== colorId);
+        const hasServerPriorityArray =
+          Array.isArray(fetchedUser?.preferredColorPriority) &&
+          fetchedUser.preferredColorPriority.length > 0;
+        const serverLooksDefault = isDefaultPreferredColorPriority(fetchedUser?.preferredColorPriority);
+        const shouldApplyLocalPriority = localLooksCustom && (!hasServerPriorityArray || serverLooksDefault);
+        const nextPriority = shouldApplyLocalPriority
+          ? normalizedPriorityFromLocal
+          : hasServerPriorityArray
+            ? normalizedPriorityFromServer
+            : normalizePreferredColorPriority(null);
         setColorPriority(nextPriority);
         setSavedColorPriority(nextPriority);
+        if (!areStringArraysEqual(normalizedPriorityFromLocal, nextPriority)) {
+          setStoredPreferredColorPriorityRaw(nextPriority);
+        }
+        if (shouldApplyLocalPriority && authToken) {
+          void apiService.putWithAuth<void>(
+            `/users/${encodeURIComponent(uid)}`,
+            { preferredColorPriority: normalizedPriorityFromLocal },
+            authToken,
+          ).catch(() => {
+            // best-effort profile sync only
+          });
+        }
 
         const nextMenuBackgroundId = resolveBackgroundFile(
           fetchedUser?.menuBackgroundId,
@@ -363,7 +401,6 @@ const SettingsPage = () => {
           fetchedUser?.gameBackgroundId,
           availableBackgroundFilesSet,
         );
-        const nextPrimaryColorId = normalizePrimaryColorId(fetchedUser?.primaryColorId);
         const nextAppearanceMode = normalizeAppearanceMode(fetchedUser?.appearanceMode);
         const nextTutorialsEnabled = fetchedUser?.tutorialsEnabled !== false;
         setTutorialsEnabled(nextTutorialsEnabled);
@@ -405,6 +442,11 @@ const SettingsPage = () => {
         setSavedCharacter(USER_DEFAULT_CHARACTER_ID);
         setColorPriority(normalizePreferredColorPriority(null));
         setSavedColorPriority(normalizePreferredColorPriority(null));
+        const normalizedPriorityFromLocal = parseStoredPreferredColorPriority(storedPreferredColorPriorityRaw);
+        const defaultPriority = normalizePreferredColorPriority(null);
+        if (!areStringArraysEqual(normalizedPriorityFromLocal, defaultPriority)) {
+          setStoredPreferredColorPriorityRaw(defaultPriority);
+        }
         const fallbackMenuBackground = resolveBackgroundFile(
           USER_DEFAULT_MENU_BACKGROUND_ID,
           availableBackgroundFilesSet,
@@ -447,7 +489,9 @@ const SettingsPage = () => {
     apiService,
     availableBackgroundFilesSet,
     availableMusicTracks,
+    storedPreferredColorPriorityRaw,
     setStoredAppearanceMode,
+    setStoredPreferredColorPriorityRaw,
     setStoredPrimaryColorId,
     token,
     userId,
@@ -725,6 +769,7 @@ const SettingsPage = () => {
       });
       setSavedCharacter(selectedCharacter);
       setSavedColorPriority([...colorPriority]);
+      setStoredPreferredColorPriorityRaw(colorPriority);
       setBioValue(nextBio);
       setBioDraft(nextBio);
       setEditingBio(false);
@@ -919,6 +964,7 @@ const SettingsPage = () => {
                       <CharacterAvatar
                         characterId={character.id}
                         primaryColorId={colorPriority[0]}
+                        autoBlink
                         alt={character.label}
                         fill
                         sizes="84px"
@@ -978,8 +1024,8 @@ const SettingsPage = () => {
                   <span className="settings-option-title">Preferred Character Colors</span>
                 </div>
                 <p className="settings-preference-note">
-                  Your 1st choice sets your character wearable color (scarf, hoodie, etc.), and in lobbies, the color
-                  will fall back to your next choices if a color is already taken.
+                  Your 1st choice sets your character wearable color (scarf, hoodie, etc.). The order is stored as your
+                  personal preference.
                 </p>
                 <div className="settings-priority-grid">
                   {USER_PRIORITY_LABELS.map((priorityLabel, index) => (

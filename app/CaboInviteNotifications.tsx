@@ -74,11 +74,17 @@ export default function CaboInviteNotifications() {
     }
 
     let active = true;
+    let pollingInFlight = false;
     const pollInvites = async () => {
-      if (!active) {
+      if (!active || pollingInFlight) {
         return;
       }
-      await loadPending();
+      pollingInFlight = true;
+      try {
+        await loadPending();
+      } finally {
+        pollingInFlight = false;
+      }
     };
 
     void pollInvites();
@@ -97,7 +103,7 @@ export default function CaboInviteNotifications() {
   useEffect(() => {
     if (!current) return;
     const interval = setInterval(() => {
-      setRequestAttentionFrame((prev) => (prev >= 3 ? 1 : prev + 1));
+      setRequestAttentionFrame((prev) => (prev >= 4 ? 1 : prev + 1));
     }, 400);
     return () => clearInterval(interval);
   }, [current]);
@@ -180,7 +186,7 @@ export default function CaboInviteNotifications() {
     <div className="cabo-invite-corner" role="status" aria-live="polite">
       <div className="cabo-invite-corner-main">
         <Image
-          src={`/request_attention${requestAttentionFrame}.png`}
+          src={`/request_attention_${requestAttentionFrame}.png`}
           alt="Cabo Guy"
           width={96}
           height={96}
