@@ -3538,7 +3538,7 @@ useEffect(() => {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     const intervalId = window.setInterval(
         syncTurnOwnership,
-        socketSynced ? 2500 : 1000
+        socketSynced ? 10000 : 1000
     );
 
     return () => {
@@ -3595,7 +3595,7 @@ useEffect(() => {
     };
 
     void resyncDiscardPileTop();
-    const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 4000 : 1800);
+    const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 10000 : 1800);
     window.addEventListener("pointerdown", handlePageShow, { passive: true });
     window.addEventListener("focus", handlePageShow, { passive: true });
     window.addEventListener("pageshow", handlePageShow, { passive: true });
