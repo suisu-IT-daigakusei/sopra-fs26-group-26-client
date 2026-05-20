@@ -33,7 +33,7 @@ http://localhost:3000
 ```
 
 ## Running the Tests
-### Build Test
+### Prodution Build Check
 To make sure that the production build compiles without errors (mirrors what Vercel runs on deployment) run the following command in the terminal:
 ```
 npm run build
