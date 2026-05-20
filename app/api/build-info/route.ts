@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { getApiDomain } from "@/utils/domain";
 
 const execFileAsync = promisify(execFile);
 export const dynamic = "force-dynamic";
@@ -92,20 +93,7 @@ function normalizeBaseUrl(value: string): string {
 }
 
 function getBackendApiBaseUrl(): string {
-  const explicitUrl = String(process.env.NEXT_PUBLIC_API_URL ?? "").trim();
-  if (explicitUrl) {
-    return normalizeBaseUrl(explicitUrl);
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    const prodUrl = String(process.env.NEXT_PUBLIC_PROD_API_URL ?? "").trim();
-    if (prodUrl) {
-      return normalizeBaseUrl(prodUrl);
-    }
-    return "https://scientific-crow-494106-c4.oa.r.appspot.com";
-  }
-
-  return "http://localhost:8080";
+  return normalizeBaseUrl(getApiDomain());
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -149,29 +137,41 @@ function extractServerBuildInfoPayload(payload: unknown): unknown {
 }
 
 async function readServerBuildInfoFromBackend(apiBaseUrl: string): Promise<BuildInfo> {
-  const timeoutController = new AbortController();
-  const timeoutHandle = setTimeout(() => timeoutController.abort(), 2000);
+  const endpointCandidates = [
+    `${apiBaseUrl}/build-info`,
+    `${apiBaseUrl}/api/build-info`,
+  ];
 
-  try {
-    const response = await fetch(`${apiBaseUrl}/build-info`, {
-      method: "GET",
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-      },
-      signal: timeoutController.signal,
-    });
-    if (!response.ok) {
-      return toUnknownBuildInfo();
+  for (const endpointUrl of endpointCandidates) {
+    const timeoutController = new AbortController();
+    const timeoutHandle = setTimeout(() => timeoutController.abort(), 2000);
+
+    try {
+      const response = await fetch(endpointUrl, {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+        },
+        signal: timeoutController.signal,
+      });
+      if (!response.ok) {
+        continue;
+      }
+
+      const payload = await response.json() as unknown;
+      const buildInfo = toBuildInfo(extractServerBuildInfoPayload(payload));
+      if (isKnownBuildInfo(buildInfo)) {
+        return buildInfo;
+      }
+    } catch {
+      // try next endpoint fallback
+    } finally {
+      clearTimeout(timeoutHandle);
     }
-
-    const payload = await response.json() as unknown;
-    return toBuildInfo(extractServerBuildInfoPayload(payload));
-  } catch {
-    return toUnknownBuildInfo();
-  } finally {
-    clearTimeout(timeoutHandle);
   }
+
+  return toUnknownBuildInfo();
 }
 
 export async function GET() {

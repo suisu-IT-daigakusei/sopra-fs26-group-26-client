@@ -5,11 +5,17 @@ export class ApiService {
   private baseURL: string;
   private defaultHeaders: HeadersInit;
   private inFlightGetRequests: Map<string, Promise<unknown>>;
+  private eTagByGetRequestKey: Map<string, string>;
+  private cachedGetPayloadByRequestKey: Map<string, unknown>;
+  private cooldownUntilEpochMsByRequestKey: Map<string, number>;
 
   constructor() {
     this.baseURL = getApiDomain(); // Klasse die backend URL holt, damit Frontend weiss wohin es die Requests schicken soll
     this.defaultHeaders = {};
     this.inFlightGetRequests = new Map<string, Promise<unknown>>();
+    this.eTagByGetRequestKey = new Map<string, string>();
+    this.cachedGetPayloadByRequestKey = new Map<string, unknown>();
+    this.cooldownUntilEpochMsByRequestKey = new Map<string, number>();
   }
 
   private buildGetRequestKey(endpoint: string, token?: string): string {
@@ -35,6 +41,60 @@ export class ApiService {
 
     this.inFlightGetRequests.set(requestKey, pendingRequest as Promise<unknown>);
     return pendingRequest;
+  }
+
+  private parseRetryAfterMs(retryAfterHeaderValue: string | null): number | null {
+    if (!retryAfterHeaderValue) {
+      return null;
+    }
+
+    const numericSeconds = Number(retryAfterHeaderValue);
+    if (Number.isFinite(numericSeconds) && numericSeconds > 0) {
+      return Math.max(0, Math.ceil(numericSeconds * 1000));
+    }
+
+    const parsedDateMs = Date.parse(retryAfterHeaderValue);
+    if (Number.isFinite(parsedDateMs)) {
+      return Math.max(0, parsedDateMs - Date.now());
+    }
+
+    return null;
+  }
+
+  private buildRateLimitError(endpoint: string, retryAfterMs: number): ApplicationError {
+    const safeRetryAfterMs = Math.max(250, Math.ceil(retryAfterMs));
+    const error: ApplicationError = new Error(
+      `Request temporarily rate-limited for ${endpoint}. Retry shortly.`,
+    ) as ApplicationError;
+    error.info = JSON.stringify(
+      { status: 429, statusText: "Too Many Requests", retryAfterMs: safeRetryAfterMs },
+      null,
+      2,
+    );
+    error.status = 429;
+    error.retryAfterMs = safeRetryAfterMs;
+    return error;
+  }
+
+  private throwIfGetRequestInCooldown(requestKey: string, endpoint: string): void {
+    const cooldownUntilMs = this.cooldownUntilEpochMsByRequestKey.get(requestKey);
+    if (!cooldownUntilMs) {
+      return;
+    }
+
+    const remainingMs = cooldownUntilMs - Date.now();
+    if (remainingMs <= 0) {
+      this.cooldownUntilEpochMsByRequestKey.delete(requestKey);
+      return;
+    }
+
+    throw this.buildRateLimitError(endpoint, remainingMs);
+  }
+
+  private applyGetCooldownFromResponse(requestKey: string, res: Response): void {
+    const retryAfterMs = this.parseRetryAfterMs(res.headers.get("Retry-After")) ?? 1000;
+    const cooldownUntilMs = Date.now() + Math.max(250, retryAfterMs);
+    this.cooldownUntilEpochMsByRequestKey.set(requestKey, cooldownUntilMs);
   }
 
   /**
@@ -71,17 +131,78 @@ export class ApiService {
       const error: ApplicationError = new Error(
         detailedMessage,
       ) as ApplicationError;
+      const retryAfterMs = this.parseRetryAfterMs(res.headers.get("Retry-After"));
       error.info = JSON.stringify(
-        { status: res.status, statusText: res.statusText },
+        { status: res.status, statusText: res.statusText, retryAfterMs },
         null,
         2,
       );
       error.status = res.status;
+      if (retryAfterMs != null) {
+        error.retryAfterMs = retryAfterMs;
+      }
       throw error;
     }
     return res.headers.get("Content-Type")?.includes("application/json")
       ? (res.json() as Promise<T>)
       : Promise.resolve(res as T);
+  }
+
+  private async performGetWithCaching<T>(
+    endpoint: string,
+    requestKey: string,
+    headers: HeadersInit,
+  ): Promise<T> {
+    this.throwIfGetRequestInCooldown(requestKey, endpoint);
+
+    const url = `${this.baseURL}${endpoint}`;
+    const hasCachedPayload = this.cachedGetPayloadByRequestKey.has(requestKey);
+    const knownEtag = this.eTagByGetRequestKey.get(requestKey);
+
+    const send = (includeEtag: boolean) => {
+      const requestHeaders: HeadersInit =
+        includeEtag && knownEtag && hasCachedPayload
+          ? { ...headers, "If-None-Match": knownEtag }
+          : headers;
+      return fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: requestHeaders,
+      });
+    };
+
+    let res = await send(true);
+    if (res.status === 304 && !hasCachedPayload) {
+      this.eTagByGetRequestKey.delete(requestKey);
+      res = await send(false);
+    }
+
+    if (res.status === 304 && hasCachedPayload) {
+      this.cooldownUntilEpochMsByRequestKey.delete(requestKey);
+      return this.cachedGetPayloadByRequestKey.get(requestKey) as T;
+    }
+
+    if (res.status === 429) {
+      this.applyGetCooldownFromResponse(requestKey, res);
+    }
+
+    const payload = await this.processResponse<T>(
+      res,
+      "An error occurred while fetching the data.\n",
+    );
+
+    this.cooldownUntilEpochMsByRequestKey.delete(requestKey);
+    const responseEtag = res.headers.get("ETag");
+    const isJsonPayload = res.headers.get("Content-Type")?.includes("application/json") === true;
+    if (res.ok && responseEtag && isJsonPayload) {
+      this.eTagByGetRequestKey.set(requestKey, responseEtag);
+      this.cachedGetPayloadByRequestKey.set(requestKey, payload as unknown);
+    } else if (res.ok && (!responseEtag || !isJsonPayload)) {
+      this.eTagByGetRequestKey.delete(requestKey);
+      this.cachedGetPayloadByRequestKey.delete(requestKey);
+    }
+
+    return payload;
   }
 
   /**
@@ -95,18 +216,7 @@ export class ApiService {
     const requestKey = this.buildGetRequestKey(endpoint);
     return this.runDedupedGetRequest<T>(
       requestKey,
-      async () => {
-        const url = `${this.baseURL}${endpoint}`;
-        const res = await fetch(url, {
-          method: "GET",
-          cache: "no-store",
-          headers: this.defaultHeaders,
-        });
-        return this.processResponse<T>(
-          res,
-          "An error occurred while fetching the data.\n",
-        );
-      },
+      async () => this.performGetWithCaching<T>(endpoint, requestKey, this.defaultHeaders),
     );
   }
 
@@ -210,17 +320,8 @@ export class ApiService {
     return this.runDedupedGetRequest<T>(
       requestKey,
       async () => {
-        const url = `${this.baseURL}${endpoint}`;
-        const res = await fetch(url, {
-          method: "GET",
-          cache: "no-store", // Cache disabled to make redirect no break in case of outdated token etc.
-          headers: this.authHeaders(token),
-        });
         try {
-          return await this.processResponse<T>(
-            res,
-            "An error occurred while fetching the data.\n",
-          );
+          return await this.performGetWithCaching<T>(endpoint, requestKey, this.authHeaders(token));
         } catch (error) {
           this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
           throw error;

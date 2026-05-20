@@ -125,6 +125,16 @@ type GameRuntimeConfigResponse = {
     rematchDeadlineEpochMs?: number | string | null;
 };
 
+type SyncStateResponse = {
+    status?: string | null;
+    currentTurnUserId?: number | string | null;
+    myHand?: unknown;
+    discardTop?: unknown;
+    drawnCard?: unknown;
+    postRoundSessionId?: string | null;
+    rematchDecisionSeconds?: number | string | null;
+};
+
 type WaitingLobbyPlayerRow = {
     userId?: number | string | null;
     username?: string | null;
@@ -261,6 +271,11 @@ function toFiniteNumberOrUndefined(value: unknown): number | undefined {
     }
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isRateLimitedError(error: unknown): boolean {
+    const status = (error as Partial<ApplicationError>)?.status;
+    return status === 429;
 }
 
 function normalizeGameStatus(value: unknown): string {
@@ -781,6 +796,16 @@ function toValidCardOrNull(candidate: unknown): Card | null {
         visibility: Boolean(record.visibility),
         ability: typeof record.ability === "string" ? record.ability : "",
     };
+}
+
+function toValidCardList(candidate: unknown): Card[] {
+    if (!Array.isArray(candidate)) {
+        return [];
+    }
+
+    return candidate
+        .map((entry) => toValidCardOrNull(entry))
+        .filter((entry): entry is Card => entry != null);
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | null {
@@ -1358,6 +1383,7 @@ const Game = () => {
       const turnDeadlineMsRef = useRef<number | null>(null);
       const caboRevealDeadlineMsRef = useRef<number | null>(null);
       const rematchDeadlineMsRef = useRef<number | null>(null);
+      const postRoundSessionIdFromSyncRef = useRef<string>("");
       const consecutiveNotMyTurnPollsRef = useRef<number>(0);
       const consecutiveNoOwnerProbePollsRef = useRef<number>(0);
       const caboRevealPlayerNameRef = useRef<HTMLParagraphElement | null>(null);
@@ -1914,27 +1940,7 @@ const Game = () => {
                   // Catch up immediately after reconnect in case one or more websocket
                   // game-state frames were missed while disconnected/backgrounded.
                   void Promise.allSettled([
-                      apiService
-                          .getWithAuth<Card[]>(`/games/${gameId}/my-hand`, authToken)
-                          .then((hand) => setMyHand(hand)),
-                      apiService
-                          .getWithAuth<Card | null>(`/games/${gameId}/discard-pile/top`, authToken)
-                          .then((topCard) => {
-                              const normalizedTopCard = topCard ?? null;
-                              setDiscardTopCard(normalizedTopCard);
-                              discardTopCardRef.current = normalizedTopCard;
-                              clearDiscardTopOverrideTimer();
-                              setDiscardTopAnimationOverride(null);
-                          }),
-                      apiService
-                          .getWithAuth<unknown>(`/games/${gameId}/drawn-card`, authToken)
-                          .then((rawCard) => {
-                              const nextDrawnCard = toValidCardOrNull(rawCard);
-                              applyDrawnCardState(nextDrawnCard);
-                          })
-                          .catch(() => {
-                              applyDrawnCardState(null);
-                          }),
+                      refreshSyncState(gameId, authToken),
                       loadAuthoritativeRematchTiming(authToken),
                   ]);
                   client.subscribe("/user/queue/game-state", (message) => {
@@ -2800,9 +2806,30 @@ const Game = () => {
           const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
           const spectatorQuerySuffix = isSpectatorMode ? "?spectator=1" : "";
           const navigateAfterRound = async () => {
+              try {
+                  const syncSnapshot = await apiService.getWithAuth<SyncStateResponse>(
+                      `/games/${gameId}/sync-state`,
+                      token,
+                  );
+                  const syncSessionId = String(syncSnapshot?.postRoundSessionId ?? "").trim();
+                  if (syncSessionId) {
+                      postRoundSessionIdFromSyncRef.current = syncSessionId;
+                  }
+              } catch {
+                  // fall back to dedicated post-round probes
+              }
+
               // Rematch lobby assignment can be slightly delayed after ROUND_ENDED.
               // Retry briefly before falling back to dashboard.
               for (let attempt = 0; attempt < 6; attempt += 1) {
+                  const syncedWaitingSessionId = String(postRoundSessionIdFromSyncRef.current ?? "").trim();
+                  if (syncedWaitingSessionId) {
+                      setActiveLobbySessionId(syncedWaitingSessionId);
+                      setActiveSessionId(syncedWaitingSessionId);
+                      router.replace(`/lobby/${encodeURIComponent(syncedWaitingSessionId)}${spectatorQuerySuffix}`);
+                      return;
+                  }
+
                   try {
                       const response = await apiService.getWithAuth<{ sessionId?: string }>(
                           `/games/${gameId}/post-round-lobby`,
@@ -3262,6 +3289,49 @@ const refreshOwnHand = async (activeGameId: string, authToken: string) => {
     setMyHand(hand);
 };
 
+const refreshSyncState = useCallback(async (activeGameId: string, authToken: string): Promise<number | null> => {
+    const response = await apiService.getWithAuth<SyncStateResponse>(
+        `/games/${activeGameId}/sync-state`,
+        authToken,
+    );
+
+    const nextStatus = normalizeGameStatus(response?.status);
+    if (nextStatus) {
+        setGameStatus((currentStatus) => (currentStatus === nextStatus ? currentStatus : nextStatus));
+    }
+
+    const parsedTurnUserId = Number(response?.currentTurnUserId);
+    const nextTurnUserId = Number.isFinite(parsedTurnUserId) ? parsedTurnUserId : null;
+    setCurrentTurnUserId((previous) => (previous === nextTurnUserId ? previous : nextTurnUserId));
+    currentTurnUserIdRef.current = nextTurnUserId;
+
+    const hand = toValidCardList(response?.myHand);
+    if (hand.length > 0 || !isSpectatorMode) {
+        setMyHand(hand);
+    }
+
+    const topCard = toValidCardOrNull(response?.discardTop);
+    setDiscardTopCard(topCard);
+    discardTopCardRef.current = topCard;
+    clearDiscardTopOverrideTimer();
+    setDiscardTopAnimationOverride(null);
+
+    const nextDrawnCard = toValidCardOrNull(response?.drawnCard);
+    applyDrawnCardState(nextDrawnCard);
+
+    const nextPostRoundSessionId = String(response?.postRoundSessionId ?? "").trim();
+    postRoundSessionIdFromSyncRef.current = nextPostRoundSessionId;
+    if (nextPostRoundSessionId) {
+        setActiveLobbySessionId(nextPostRoundSessionId);
+    }
+
+    const nextRematchDecisionSeconds = toFiniteNumberOrUndefined(response?.rematchDecisionSeconds);
+    if (nextRematchDecisionSeconds != null && nextRematchDecisionSeconds > 0) {
+        setRematchDecisionDuration(Math.floor(nextRematchDecisionSeconds));
+    }
+    return nextTurnUserId;
+}, [apiService, isSpectatorMode, setActiveLobbySessionId]);
+
 const refreshDiscardPileTop = async (activeGameId: string, authToken: string) => {
     try {
         const topCard = await apiService.getWithAuth<Card | null>(
@@ -3302,11 +3372,17 @@ const resyncTurnActionState = async (
     authToken: string,
     options?: { resetTransientActionFlags?: boolean },
 ) => {
-    await Promise.allSettled([
-        refreshOwnHand(activeGameId, authToken),
-        refreshDiscardPileTop(activeGameId, authToken),
-        refreshDrawnCardFromServer(activeGameId, authToken),
-    ]);
+    try {
+        await refreshSyncState(activeGameId, authToken);
+    } catch (error) {
+        if (!isRateLimitedError(error)) {
+            await Promise.allSettled([
+                refreshOwnHand(activeGameId, authToken),
+                refreshDiscardPileTop(activeGameId, authToken),
+                refreshDrawnCardFromServer(activeGameId, authToken),
+            ]);
+        }
+    }
     if (options?.resetTransientActionFlags !== false) {
         setIsDrawingFromPile(false);
         setIsDrawingFromDiscardPile(false);
@@ -3371,12 +3447,19 @@ useEffect(() => {
     consecutiveNotMyTurnPollsRef.current = 0;
     consecutiveNoOwnerProbePollsRef.current = 0;
     const resolveTurnOwnerFromServer = async (): Promise<number | null> => {
-        const response = await apiService.getWithAuth<{ currentTurnUserId?: number | string | null }>(
-            `/games/${encodeURIComponent(gameId)}/turn-owner`,
-            authToken,
-        );
-        const parsedTurnUserId = Number(response?.currentTurnUserId);
-        return Number.isFinite(parsedTurnUserId) ? parsedTurnUserId : null;
+        try {
+            return await refreshSyncState(gameId, authToken);
+        } catch (error) {
+            if (isRateLimitedError(error)) {
+                throw error;
+            }
+            const response = await apiService.getWithAuth<{ currentTurnUserId?: number | string | null }>(
+                `/games/${encodeURIComponent(gameId)}/turn-owner`,
+                authToken,
+            );
+            const parsedTurnUserId = Number(response?.currentTurnUserId);
+            return Number.isFinite(parsedTurnUserId) ? parsedTurnUserId : null;
+        }
     };
 
     const syncTurnOwnership = async () => {
@@ -3490,6 +3573,7 @@ useEffect(() => {
     isAbilityPending,
     isUseAbilitySelected,
     isAbilityChoicePending,
+    refreshSyncState,
 ]);
 
 useEffect(() => {
@@ -3518,16 +3602,15 @@ useEffect(() => {
             now - lastAuthoritativeResyncMsRef.current > 12000;
 
         try {
-            await refreshDiscardPileTop(gameId, authToken);
-
-            // When websocket is desynced, also refresh hand and drawn-card state so
-            // board state converges without waiting for manual focus/click recovery.
             if (shouldRunFullResync) {
-                await Promise.allSettled([
-                    refreshOwnHand(gameId, authToken),
-                    refreshDrawnCardFromServer(gameId, authToken),
-                ]);
+                await refreshSyncState(gameId, authToken);
                 lastAuthoritativeResyncMsRef.current = Date.now();
+            } else {
+                await refreshDiscardPileTop(gameId, authToken);
+            }
+        } catch (error) {
+            if (!isRateLimitedError(error)) {
+                console.error("Discard fallback resync failed:", error);
             }
         } finally {
             discardResyncInFlightRef.current = false;
