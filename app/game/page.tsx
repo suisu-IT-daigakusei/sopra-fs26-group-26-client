@@ -1318,6 +1318,8 @@ const Game = () => {
       const lastProcessedMoveSequenceRef = useRef<number>(0);
       const lastGameStateSignalMsRef = useRef<number>(Date.now());
       const lastAuthoritativeResyncMsRef = useRef<number>(0);
+      const turnOwnerProbeInFlightRef = useRef<boolean>(false);
+      const discardResyncInFlightRef = useRef<boolean>(false);
       const hasSeenCaboCallStateRef = useRef<boolean>(false);
       const previousCaboCalledStateRef = useRef<boolean>(false);
       const previousCaboRevealWinnerStageRef = useRef<boolean>(false);
@@ -3321,18 +3323,24 @@ useEffect(() => {
         return;
     }
 
+    const skipTurnOwnerFallbackPolling =
+        gameStatus === "cabo_reveal" ||
+        gameStatus === "round_awaiting_rematch" ||
+        gameStatus === "round_ended";
+    if (skipTurnOwnerFallbackPolling) {
+        return;
+    }
+
     const resyncOnFocus = async () => {
         lastActivityMsRef.current = Date.now();
+        if (Date.now() - lastAuthoritativeResyncMsRef.current < 1200) {
+            return;
+        }
         clearDiscardTopOverrideTimer();
         setDiscardTopAnimationOverride(null);
 
         // Keep local view aligned after tab/background throttling without waiting for a manual click.
-        await Promise.allSettled([
-            refreshOwnHand(gameId, authToken),
-            refreshDiscardPileTop(gameId, authToken),
-            refreshDrawnCardFromServer(gameId, authToken),
-        ]);
-        lastAuthoritativeResyncMsRef.current = Date.now();
+        await resyncTurnActionState(gameId, authToken, { resetTransientActionFlags: false });
     };
 
     const handleVisibilityChange = () => {
@@ -3372,6 +3380,10 @@ useEffect(() => {
     };
 
     const syncTurnOwnership = async () => {
+        if (turnOwnerProbeInFlightRef.current) {
+            return;
+        }
+        turnOwnerProbeInFlightRef.current = true;
         try {
             const nextTurnUserId = await resolveTurnOwnerFromServer();
             if (!active) {
@@ -3423,11 +3435,16 @@ useEffect(() => {
                 return;
             }
             setSocketSynced(false);
+        } finally {
+            turnOwnerProbeInFlightRef.current = false;
         }
     };
 
     const runFocusRecoveryBurst = () => {
         void syncTurnOwnership();
+        if (socketSynced) {
+            return;
+        }
         if (followUpTimeoutId != null) {
             window.clearTimeout(followUpTimeoutId);
         }
@@ -3466,6 +3483,7 @@ useEffect(() => {
 }, [
     apiService,
     gameId,
+    gameStatus,
     selfUserId,
     token,
     socketSynced,
@@ -3480,23 +3498,39 @@ useEffect(() => {
         return;
     }
 
+    const skipDiscardFallbackPolling =
+        gameStatus === "cabo_reveal" ||
+        gameStatus === "round_awaiting_rematch" ||
+        gameStatus === "round_ended";
+    if (skipDiscardFallbackPolling) {
+        return;
+    }
+
     const resyncDiscardPileTop = async () => {
+        if (discardResyncInFlightRef.current) {
+            return;
+        }
+        discardResyncInFlightRef.current = true;
         const now = Date.now();
         const shouldRunFullResync =
             !socketSynced ||
             now - lastGameStateSignalMsRef.current > 8000 ||
             now - lastAuthoritativeResyncMsRef.current > 12000;
 
-        await refreshDiscardPileTop(gameId, authToken);
+        try {
+            await refreshDiscardPileTop(gameId, authToken);
 
-        // When websocket is desynced, also refresh hand and drawn-card state so
-        // board state converges without waiting for manual focus/click recovery.
-        if (shouldRunFullResync) {
-            await Promise.allSettled([
-                refreshOwnHand(gameId, authToken),
-                refreshDrawnCardFromServer(gameId, authToken),
-            ]);
-            lastAuthoritativeResyncMsRef.current = Date.now();
+            // When websocket is desynced, also refresh hand and drawn-card state so
+            // board state converges without waiting for manual focus/click recovery.
+            if (shouldRunFullResync) {
+                await Promise.allSettled([
+                    refreshOwnHand(gameId, authToken),
+                    refreshDrawnCardFromServer(gameId, authToken),
+                ]);
+                lastAuthoritativeResyncMsRef.current = Date.now();
+            }
+        } finally {
+            discardResyncInFlightRef.current = false;
         }
     };
 
@@ -3511,20 +3545,18 @@ useEffect(() => {
 
     void resyncDiscardPileTop();
     const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 10000 : 4500);
-    window.addEventListener("pointerdown", handlePageShow, { passive: true });
     window.addEventListener("focus", handlePageShow, { passive: true });
     window.addEventListener("pageshow", handlePageShow, { passive: true });
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
         window.clearInterval(intervalId);
-        window.removeEventListener("pointerdown", handlePageShow);
         window.removeEventListener("focus", handlePageShow);
         window.removeEventListener("pageshow", handlePageShow);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
 // Poll cadence depends on sync state; helper refs are intentionally omitted.
 // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [apiService, gameId, token, socketSynced]);
+}, [apiService, gameId, token, socketSynced, gameStatus]);
 
 const clearFlyingCardTimer = () => {
     if (flyingCardTimeoutsRef.current.length === 0) {
