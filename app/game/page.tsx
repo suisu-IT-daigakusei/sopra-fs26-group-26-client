@@ -128,6 +128,10 @@ type GameRuntimeConfigResponse = {
 type SyncStateResponse = {
     status?: string | null;
     currentTurnUserId?: number | string | null;
+    caboCalled?: boolean | null;
+    caboForcedByTimeout?: boolean | null;
+    timedOutPlayerIds?: Array<number | string | null> | null;
+    afkTimeoutSeconds?: number | string | null;
     myHand?: unknown;
     discardTop?: unknown;
     drawnCard?: unknown;
@@ -1729,11 +1733,16 @@ const Game = () => {
               return;
           }
 
-          if (!previousCaboCalledStateRef.current && isCaboCalledGlobal) {
+          const isActiveCallPhase =
+              gameStatus === "round_active" ||
+              gameStatus === "ability_peek_self" ||
+              gameStatus === "ability_peek_opponent" ||
+              gameStatus === "ability_swap";
+          if (!previousCaboCalledStateRef.current && isCaboCalledGlobal && isActiveCallPhase) {
               playSharedCaboSoundEffect("cabo_call");
           }
           previousCaboCalledStateRef.current = isCaboCalledGlobal;
-      }, [isCaboCalledGlobal]);
+      }, [gameStatus, isCaboCalledGlobal]);
 
       const applyDrawnCardState = (nextDrawnCard: Card | null, sourceHint: DrawSource | null = null) => {
           setDrawnCard(nextDrawnCard);
@@ -2298,13 +2307,22 @@ const Game = () => {
 
               },
               onStompError: () => {
-                  setSocketSynced(false);
+                  const pageVisible = typeof document === "undefined" || document.visibilityState === "visible";
+                  if (pageVisible) {
+                      setSocketSynced(false);
+                  }
               },
               onWebSocketClose: () => {
-                  setSocketSynced(false);
+                  const pageVisible = typeof document === "undefined" || document.visibilityState === "visible";
+                  if (pageVisible) {
+                      setSocketSynced(false);
+                  }
               },
               onWebSocketError: () => {
-                  setSocketSynced(false);
+                  const pageVisible = typeof document === "undefined" || document.visibilityState === "visible";
+                  if (pageVisible) {
+                      setSocketSynced(false);
+                  }
               },
           });
 
@@ -2340,13 +2358,19 @@ const Game = () => {
 
           markActive();
           window.addEventListener("pointerdown", markActive, { passive: true });
+          window.addEventListener("pointermove", markActive, { passive: true });
           window.addEventListener("keydown", markActive, { passive: true });
+          window.addEventListener("wheel", markActive, { passive: true });
+          window.addEventListener("touchstart", markActive, { passive: true });
           window.addEventListener("focus", markActive, { passive: true });
           document.addEventListener("visibilitychange", markActiveOnVisible);
 
           return () => {
               window.removeEventListener("pointerdown", markActive);
+              window.removeEventListener("pointermove", markActive);
               window.removeEventListener("keydown", markActive);
+              window.removeEventListener("wheel", markActive);
+              window.removeEventListener("touchstart", markActive);
               window.removeEventListener("focus", markActive);
               document.removeEventListener("visibilitychange", markActiveOnVisible);
           };
@@ -3299,6 +3323,32 @@ const refreshSyncState = useCallback(async (activeGameId: string, authToken: str
     if (nextStatus) {
         setGameStatus((currentStatus) => (currentStatus === nextStatus ? currentStatus : nextStatus));
     }
+    if (typeof response?.caboCalled === "boolean") {
+        setIsCaboCalledGlobal(response.caboCalled);
+    } else if (
+        nextStatus === "intro" ||
+        nextStatus === "initial_peek" ||
+        nextStatus === "round_active"
+    ) {
+        // Protect against stale cabo-called banners after reconnects when sync payloads
+        // omit the explicit cabo flag for an actively running round.
+        setIsCaboCalledGlobal(false);
+        setIsCaboForcedByTimeoutGlobal(false);
+    }
+    if (typeof response?.caboForcedByTimeout === "boolean") {
+        setIsCaboForcedByTimeoutGlobal(response.caboForcedByTimeout);
+    }
+    if (Array.isArray(response?.timedOutPlayerIds)) {
+        setTimedOutPlayerIds(
+            response.timedOutPlayerIds
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id)),
+        );
+    }
+    const nextAfkTimeout = toFiniteNumberOrUndefined(response?.afkTimeoutSeconds);
+    if (nextAfkTimeout != null && nextAfkTimeout > 0) {
+        setAfkTimeoutSeconds(Math.floor(nextAfkTimeout));
+    }
 
     const parsedTurnUserId = Number(response?.currentTurnUserId);
     const nextTurnUserId = Number.isFinite(parsedTurnUserId) ? parsedTurnUserId : null;
@@ -3513,11 +3563,21 @@ useEffect(() => {
                 currentTurnUserIdRef.current = null;
                 return null;
             });
-        } catch {
+        } catch (error) {
             if (!active) {
                 return;
             }
-            setSocketSynced(false);
+            if (isRateLimitedError(error)) {
+                return;
+            }
+            const pageVisible = typeof document === "undefined" || document.visibilityState === "visible";
+            if (!pageVisible) {
+                return;
+            }
+            const websocketFreshMs = Date.now() - lastGameStateSignalMsRef.current;
+            if (websocketFreshMs > 12000) {
+                setSocketSynced(false);
+            }
         } finally {
             turnOwnerProbeInFlightRef.current = false;
         }

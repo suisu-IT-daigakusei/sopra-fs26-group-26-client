@@ -91,8 +91,8 @@ const CHARACTER_TINT_PROFILES: Partial<Record<string, CharacterTintProfile>> = {
     maxOutputLightness: 0.74,
   },
   char04: {
-    hueRanges: [[38, 67]],
-    minSaturation: 0.3,
+    hueRanges: [[34, 74]],
+    minSaturation: 0.28,
     minLightness: 0.18,
     maxLightness: 0.9,
     startYRatio: 0.18,
@@ -166,9 +166,16 @@ const CHARACTER_TINT_PROFILES: Partial<Record<string, CharacterTintProfile>> = {
 };
 
 const tintedSrcCache = new Map<string, string>();
+const tintedSrcPromiseCache = new Map<string, Promise<string>>();
 const PROFILE_BLINK_MIN_DELAY_MS = 2600;
 const PROFILE_BLINK_MAX_DELAY_MS = 6800;
 const PROFILE_BLINK_CLOSED_MS = 130;
+const TINTED_SRC_CACHE_MAX_ENTRIES = 240;
+const TINTED_SRC_MAX_DIMENSION_BY_VARIANT: Partial<Record<CharacterAvatarVariant, number>> = {
+  waving: 640,
+  thumbsup: 640,
+  celebration: 720,
+};
 const CHARACTER_WEARABLE_HEX_BY_COLOR_ID: Record<string, string> = {
   navy_blue: "#1f4ea8",
   light_blue: "#00a7ff",
@@ -184,6 +191,79 @@ const CHARACTER_WEARABLE_LIGHTNESS_MULTIPLIER_BY_COLOR_ID: Partial<Record<string
   dark_green: 0.58,
 };
 
+function getTintProcessingMaxDimension(variant: CharacterAvatarVariant): number | null {
+  return TINTED_SRC_MAX_DIMENSION_BY_VARIANT[variant] ?? null;
+}
+
+function buildTintedCacheKey(
+  baseSrc: string,
+  targetHex: string,
+  lightnessMultiplier: number,
+  variant: CharacterAvatarVariant,
+): string {
+  const maxDimension = getTintProcessingMaxDimension(variant);
+  const dimensionToken = maxDimension == null ? "full" : String(maxDimension);
+  return `${baseSrc}::${targetHex}::${lightnessMultiplier.toFixed(3)}::${variant}::${dimensionToken}`;
+}
+
+function getCachedTintedSrc(cacheKey: string): string | null {
+  const cached = tintedSrcCache.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+  // Move key to the end (most recently used) to keep eviction hot-path friendly.
+  tintedSrcCache.delete(cacheKey);
+  tintedSrcCache.set(cacheKey, cached);
+  return cached;
+}
+
+function setCachedTintedSrc(cacheKey: string, tintedSrc: string): void {
+  if (tintedSrcCache.has(cacheKey)) {
+    tintedSrcCache.delete(cacheKey);
+  }
+  tintedSrcCache.set(cacheKey, tintedSrc);
+  while (tintedSrcCache.size > TINTED_SRC_CACHE_MAX_ENTRIES) {
+    const oldestKey = tintedSrcCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    tintedSrcCache.delete(oldestKey);
+  }
+}
+
+function getCharacterVariantImageSrc(
+  characterId: string,
+  variant: CharacterAvatarVariant,
+  frame: number,
+): string {
+  if (variant === "waving") {
+    return getCharacterWavingImageSrc(characterId, frame);
+  }
+  if (variant === "thumbsup") {
+    return getCharacterThumbsupImageSrc(characterId, frame);
+  }
+  if (variant === "celebration") {
+    return getCharacterCelebrationImageSrc(characterId, frame);
+  }
+  if (variant === "profile_blink") {
+    return getCharacterProfileBlinkImageSrc(characterId);
+  }
+  return getCharacterProfileImageSrc(characterId);
+}
+
+function relaxTintProfileForMotion(
+  profile: CharacterTintProfile,
+  saturationRelaxation: number,
+  lightnessRelaxation: number,
+): CharacterTintProfile {
+  return {
+    ...profile,
+    minSaturation: Math.max(0, profile.minSaturation - saturationRelaxation),
+    minLightness: Math.max(0, profile.minLightness - lightnessRelaxation),
+    maxLightness: Math.min(1, profile.maxLightness + lightnessRelaxation),
+  };
+}
+
 function getTintProfileForVariant(
   characterId: string,
   variant: CharacterAvatarVariant,
@@ -192,9 +272,20 @@ function getTintProfileForVariant(
   if (!baseProfile) {
     return null;
   }
+  if (variant === "waving") {
+    return {
+      ...relaxTintProfileForMotion(baseProfile, 0.04, 0.04),
+      // Waving is fast and non-rigid; slightly relax spatial gates to avoid frame-to-frame misses.
+      startYRatio: Math.max(0, (baseProfile.startYRatio ?? 0) - 0.08),
+      endYRatio: Math.min(1, (baseProfile.endYRatio ?? 1) + 0.08),
+      minXRatio: Math.max(0, (baseProfile.minXRatio ?? 0) - 0.08),
+      maxXRatio: Math.min(1, (baseProfile.maxXRatio ?? 1) + 0.08),
+      minComponentPixels: Math.max(1, Math.min(baseProfile.minComponentPixels ?? 1, 55)),
+    };
+  }
   if (variant === "celebration") {
     return {
-      ...baseProfile,
+      ...relaxTintProfileForMotion(baseProfile, 0.06, 0.05),
       // Celebration poses jump/shift more than profile sprites; relax spatial filters
       // so the wearable stays tinted while preserving hue-based masking.
       startYRatio: Math.max(0, (baseProfile.startYRatio ?? 0) - 0.18),
@@ -216,7 +307,7 @@ function getTintProfileForVariant(
     return baseProfile;
   }
   return {
-    ...baseProfile,
+    ...relaxTintProfileForMotion(baseProfile, 0.05, 0.05),
     startYRatio: Math.max(0, (baseProfile.startYRatio ?? 0) - 0.12),
     endYRatio: 1,
     minXRatio: baseProfile.minXRatio ?? 0,
@@ -541,42 +632,60 @@ async function createTintedWearableSrc(
   targetHex: string,
   tintProfile: CharacterTintProfile,
   lightnessMultiplier: number,
+  variant: CharacterAvatarVariant,
 ): Promise<string> {
-  const cacheKey = `${baseSrc}::${targetHex}::${lightnessMultiplier.toFixed(3)}`;
-  const cached = tintedSrcCache.get(cacheKey);
+  const cacheKey = buildTintedCacheKey(baseSrc, targetHex, lightnessMultiplier, variant);
+  const cached = getCachedTintedSrc(cacheKey);
   if (cached) {
     return cached;
   }
-
-  const targetRgb = hexToRgb(targetHex);
-  if (!targetRgb) {
-    return baseSrc;
+  const pending = tintedSrcPromiseCache.get(cacheKey);
+  if (pending) {
+    return pending;
   }
 
-  const image = await loadImage(baseSrc);
-  const width = image.naturalWidth;
-  const height = image.naturalHeight;
-  if (!width || !height) {
-    return baseSrc;
-  }
+  const tintingPromise = (async () => {
+    const targetRgb = hexToRgb(targetHex);
+    if (!targetRgb) {
+      return baseSrc;
+    }
 
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) {
-    return baseSrc;
-  }
+    const image = await loadImage(baseSrc);
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (!width || !height) {
+      return baseSrc;
+    }
 
-  context.drawImage(image, 0, 0, width, height);
-  const imageData = context.getImageData(0, 0, width, height);
-  const [targetHue, targetSaturation] = rgbToHsl(targetRgb[0], targetRgb[1], targetRgb[2]);
-  tintScarfPixels(imageData, targetHue, targetSaturation, tintProfile, lightnessMultiplier);
-  context.putImageData(imageData, 0, 0);
+    const maxDimension = getTintProcessingMaxDimension(variant);
+    const longestDimension = Math.max(width, height);
+    const scale = maxDimension == null ? 1 : Math.min(1, maxDimension / longestDimension);
+    const canvasWidth = Math.max(1, Math.round(width * scale));
+    const canvasHeight = Math.max(1, Math.round(height * scale));
 
-  const tintedSrc = canvas.toDataURL("image/png");
-  tintedSrcCache.set(cacheKey, tintedSrc);
-  return tintedSrc;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return baseSrc;
+    }
+
+    context.drawImage(image, 0, 0, canvasWidth, canvasHeight);
+    const imageData = context.getImageData(0, 0, canvasWidth, canvasHeight);
+    const [targetHue, targetSaturation] = rgbToHsl(targetRgb[0], targetRgb[1], targetRgb[2]);
+    tintScarfPixels(imageData, targetHue, targetSaturation, tintProfile, lightnessMultiplier);
+    context.putImageData(imageData, 0, 0);
+
+    const tintedSrc = canvas.toDataURL("image/png");
+    setCachedTintedSrc(cacheKey, tintedSrc);
+    return tintedSrc;
+  })();
+
+  tintedSrcPromiseCache.set(cacheKey, tintingPromise);
+  return tintingPromise.finally(() => {
+    tintedSrcPromiseCache.delete(cacheKey);
+  });
 }
 
 export default function CharacterAvatar({
@@ -645,17 +754,10 @@ export default function CharacterAvatar({
       : variant
   );
 
-  const baseSrc = useMemo(() => (
-    effectiveVariant === "waving"
-      ? getCharacterWavingImageSrc(normalizedCharacterId, frame)
-      : effectiveVariant === "thumbsup"
-        ? getCharacterThumbsupImageSrc(normalizedCharacterId, frame)
-        : effectiveVariant === "celebration"
-          ? getCharacterCelebrationImageSrc(normalizedCharacterId, frame)
-        : effectiveVariant === "profile_blink"
-          ? getCharacterProfileBlinkImageSrc(normalizedCharacterId)
-        : getCharacterProfileImageSrc(normalizedCharacterId)
-  ), [effectiveVariant, frame, normalizedCharacterId]);
+  const baseSrc = useMemo(
+    () => getCharacterVariantImageSrc(normalizedCharacterId, effectiveVariant, frame),
+    [effectiveVariant, frame, normalizedCharacterId],
+  );
 
   const tintProfile = useMemo(
     () => getTintProfileForVariant(normalizedCharacterId, effectiveVariant),
@@ -673,8 +775,13 @@ export default function CharacterAvatar({
       };
     }
 
-    const cacheKey = `${baseSrc}::${characterWearableColorHex}::${characterWearableLightnessMultiplier.toFixed(3)}`;
-    const cached = tintedSrcCache.get(cacheKey);
+    const cacheKey = buildTintedCacheKey(
+      baseSrc,
+      characterWearableColorHex,
+      characterWearableLightnessMultiplier,
+      effectiveVariant,
+    );
+    const cached = getCachedTintedSrc(cacheKey);
     if (cached) {
       setRenderSrc(cached);
       return () => {
@@ -689,6 +796,7 @@ export default function CharacterAvatar({
       characterWearableColorHex,
       tintProfile,
       characterWearableLightnessMultiplier,
+      effectiveVariant,
     )
       .then((nextSrc) => {
         if (active) {
@@ -708,6 +816,7 @@ export default function CharacterAvatar({
     baseSrc,
     characterWearableColorHex,
     characterWearableLightnessMultiplier,
+    effectiveVariant,
     shouldTintWearable,
     tintProfile,
   ]);

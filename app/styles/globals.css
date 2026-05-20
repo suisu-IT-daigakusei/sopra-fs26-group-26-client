@@ -1802,7 +1802,8 @@ html.cabo-text-dark .settings-appearance-dot-btn {
 
 .users-overview-table .ant-table-content,
 .responsive-list-table .ant-table-content {
-  overflow-x: hidden !important;
+  overflow-x: auto !important;
+  overscroll-behavior-x: contain;
 }
 
 .users-overview-table .ant-table-thead > tr > th {
@@ -1814,7 +1815,8 @@ html.cabo-text-dark .settings-appearance-dot-btn {
 /* responsive tables */
 .responsive-list-table .ant-table {
   width: 100% !important;
-  table-layout: fixed !important;
+  min-width: 640px;
+  table-layout: auto !important;
 }
 
 .responsive-list-table .ant-table-thead > tr > th,
@@ -2579,6 +2581,51 @@ html.cabo-text-dark .final-score-confirm-countdown {
   column-gap: 8px;
   align-items: center;
   justify-items: start;
+}
+
+@media (max-width: 640px), (max-aspect-ratio: 10/21) {
+  .dashboard-container .create-lobby-player-row.ant-list-item {
+    grid-template-columns: minmax(0, 1fr) 96px 96px;
+    column-gap: 6px;
+  }
+
+  .dashboard-container .lobby-slot-row.ant-list-item {
+    grid-template-columns: minmax(0, 1fr) 96px 40px;
+    column-gap: 6px;
+  }
+
+  .lobby-slot-label {
+    font-size: 14px;
+    min-height: 46px;
+    gap: 8px;
+  }
+
+  .lobby-slot-avatar-wrap {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+
+  .lobby-slot-status-pill,
+  .lobby-invite-status-pill {
+    width: 96px;
+    min-width: 96px;
+    height: 30px;
+    font-size: 13px;
+  }
+
+  .lobby-slot-actions {
+    width: 40px;
+    min-width: 40px;
+  }
+
+  .lobby-kick-btn.ant-btn,
+  .lobby-kick-btn.ant-btn.ant-btn-disabled,
+  .lobby-kick-btn.ant-btn:disabled {
+    width: 34px;
+    min-width: 34px;
+    height: 30px;
+  }
 }
 
 .lobby-slot-highlight-row {
@@ -6184,6 +6231,21 @@ html.cabo-text-dark .game-center-notification-spectator-peek {
 }
 
 @media (max-width: 900px), (max-aspect-ratio: 10/16) {
+  .game-layout-table {
+    inset: max(4px, env(safe-area-inset-top)) 0
+      max(10px, calc(env(safe-area-inset-bottom) + 6px)) 0;
+  }
+
+  .game-table-cell-bottom-left,
+  .game-table-cell-bottom-center,
+  .game-table-cell-bottom-right {
+    padding-bottom: max(calc(var(--game-edge-inset) + 6px), env(safe-area-inset-bottom));
+  }
+
+  .game-bottom-seat-stack {
+    padding-bottom: max(2px, env(safe-area-inset-bottom));
+  }
+
   .game-overlay {
     height: 100svh;
     min-height: 100svh;

@@ -13,6 +13,7 @@ type IncomingFriendRequest = {
 };
 
 const FRIEND_REQUESTS_POLL_MS = 4000;
+const FRIEND_REQUESTS_POLL_IN_GAME_MS = 12000;
 
 function normalizePendingRequests(raw: unknown): IncomingFriendRequest[] {
   if (!Array.isArray(raw)) {
@@ -49,11 +50,15 @@ export default function FriendRequestNotifications() {
 
   const isAuthRoute =
     pathname === "/" || pathname === "/login";
+  const isGameRoute = pathname?.startsWith("/game") ?? false;
 
   const loadIncoming = useCallback(async () => {
     const authToken = token.trim();
-    if (isAuthRoute || !authToken) {
+    if (isAuthRoute || isGameRoute || !authToken) {
       setPending([]);
+      return;
+    }
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
       return;
     }
     try {
@@ -65,11 +70,11 @@ export default function FriendRequestNotifications() {
     } catch {
       setPending([]);
     }
-  }, [api, isAuthRoute, token]);
+  }, [api, isAuthRoute, isGameRoute, token]);
 
   useEffect(() => {
     const authToken = token.trim();
-    if (isAuthRoute || !authToken || typeof window === "undefined") {
+    if (isAuthRoute || isGameRoute || !authToken || typeof window === "undefined") {
       setPending([]);
       return;
     }
@@ -91,13 +96,13 @@ export default function FriendRequestNotifications() {
     void pollIncoming();
     const intervalId = window.setInterval(() => {
       void pollIncoming();
-    }, FRIEND_REQUESTS_POLL_MS);
+    }, isGameRoute ? FRIEND_REQUESTS_POLL_IN_GAME_MS : FRIEND_REQUESTS_POLL_MS);
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [isAuthRoute, loadIncoming, token]);
+  }, [isAuthRoute, isGameRoute, loadIncoming, token]);
 
   const current = pending[0];
 
@@ -115,12 +120,12 @@ export default function FriendRequestNotifications() {
     if (typeof document === "undefined") {
       return;
     }
-    const requestActive = Boolean(!isAuthRoute && current);
+    const requestActive = Boolean(!isAuthRoute && !isGameRoute && current);
     document.body.classList.toggle("cabo-friend-request-active", requestActive);
     return () => {
       document.body.classList.remove("cabo-friend-request-active");
     };
-  }, [current, isAuthRoute]);
+  }, [current, isAuthRoute, isGameRoute]);
 
   const handleDecision = useCallback(
     async (decision: "ACCEPT" | "DECLINE") => {
@@ -158,7 +163,7 @@ export default function FriendRequestNotifications() {
     [api, current, loadIncoming, token],
   );
 
-  if (isAuthRoute || !current) {
+  if (isAuthRoute || isGameRoute || !current) {
     return null;
   }
 

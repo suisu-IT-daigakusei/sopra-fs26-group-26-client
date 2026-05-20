@@ -1997,6 +1997,17 @@ function WaitingLobbyContent() {
     } catch (error: unknown) {
       const status = (error as ApplicationError)?.status;
       const detail = error instanceof Error ? error.message.trim() : "";
+      const normalizedDetail = detail.toLowerCase();
+      const shouldTreatAsSafeLocalLeave =
+        status === 404 ||
+        status === 409 ||
+        normalizedDetail.includes("failed to fetch") ||
+        normalizedDetail.includes("networkerror");
+      if (shouldTreatAsSafeLocalLeave) {
+        setSpectatorMode("");
+        router.replace("/dashboard");
+        return;
+      }
       alert(
         status
           ? `Could not leave ${isSpectatorLobbyView ? "spectating" : "lobby"} (HTTP ${status}). ${detail || "Please try again."}`
