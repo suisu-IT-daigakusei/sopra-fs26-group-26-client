@@ -20,7 +20,7 @@ export function getApiDomain(): string {
   }
 
   const prodUrl = process.env.NEXT_PUBLIC_PROD_API_URL?.trim() ||
-    "https://scientific-crow-494106-c4.oa.r.appspot.com";
+    "https://formal-platform-496911-n8.oa.r.appspot.com";
   const devUrl = "http://localhost:8080";
   return isProduction() ? prodUrl : devUrl;
 }
