@@ -9,18 +9,23 @@ Motivation: Cabo relies on hidden information, timed phases, and synchronized up
 
 ## High-level Components
 There are five main parts work together that enable the game experience:
+
 **1. Authentication & User Management**
 Handles login, registration, protected routes, profile display and session persistence. The [`DisconnectHandler.tsx`](app/components/DisconnectHandler.tsx) monitors connection state and redirects unauthenticated users automatically.
 Main files: [`app/login/page.tsx`](app/login/page.tsx), [`app/users/[id]/page.tsx`](app/users/%5Bid%5D/page.tsx)
+
 **2. Lobby & Session System**
 Manages lobby creation, joining via session code or open lobby list, waiting room synchronization and player/spectator tracking. Real-time updates are delivered via WebSocket.
 Main file: [`app/lobby/waiting/page.tsx`](app/lobby/waiting/page.tsx), [`app/lobby/join/page.tsx`](app/lobby/join/page.tsx)
+
 **3. Game Engine**
 The largest and most complex component. Manages the full game lifecycle including card drawing, swapping, special abilities (Peek, Spy, Swap), turn timers, AFK handling, flying card animations, WebSocket synchronization and rematch flow.
 Main file: [`app/game/page.tsx`](app/game/page.tsx)
+
 **4. Card & UI Components**
 Renders all cards with correct front images, ability badges and interaction highlights. Also includes the peek timer, turn timer, scores modal and final score screen.
 Main files: [`app/game/components/CardComponent.tsx`](app/game/components/CardComponent.tsx), [`app/game/components/PeekTimer.tsx`](app/game/components/PeekTimer.tsx), [`app/game/components/FinalScoreScreen.tsx`](app/game/components/FinalScoreScreen.tsx)
+
 **5. History & Notifications**
 Allows users to look up past sessions and their move logs. Real-time invite notifications are shown globally across all pages.
 Main files: [`app/history/[sessionId]/page.tsx`](app/history/%5BsessionId%5D/page.tsx), [`app/CaboInviteNotifications.tsx`](app/CaboInviteNotifications.tsx)
