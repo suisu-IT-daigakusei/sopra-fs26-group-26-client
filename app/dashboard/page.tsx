@@ -508,7 +508,6 @@ function DashboardContent() {
         </div>
       </div>
 
-    <div style={{ color: "#222222" }}></div>
       <GameTutorialModal 
         isOpen={isTutorialOpen} 
         onClose={() => setIsTutorialOpen(false)} 
