@@ -17,7 +17,7 @@ import useLocalStorage from "@/hooks/useLocalStorage";
 import CardComponent from "./components/CardComponent";
 import PeekTimer from "./components/PeekTimer";
 import type { ApplicationError } from "@/types/error";
-import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
+import { getStompBrokerUrl } from "@/utils/domain";
 import { Client } from "@stomp/stompjs";
 import SockJS from "sockjs-client";
 import type { User } from "@/types/user";
@@ -1174,36 +1174,13 @@ const Game = () => {
   const TURN_CARD_DRAG_MIME = "application/x-cabo-turn-card";
   const DISCARD_PILE_SWAP_DRAG_MIME = "application/x-cabo-discard-pile-swap";
   const FLYING_CARD_ANIMATION_MS = 3000; // slower
-  const SESSION_SCORE_REFRESH_MS = 8000;
+  const SESSION_SCORE_REFRESH_MS = 12000;
   const createHiddenPeekCards = () => Array(HAND_SIZE).fill(false); // hide card by default
 
 
 
   // Backlog #9: Implement logic to always render the DiscardPile top card with its face-up value
       const [discardTopCard, setDiscardTopCard] = useState<Card | null>(null);
-
-      //get the top card from the backend
-      useEffect(() => {
-          const authToken = token.trim();
-          if (!gameId || !authToken) {
-              setDiscardTopCard(null);
-              return;
-          }
-
-          const fetchDiscardTopCard = async () => {
-              try {
-                  const card = await apiService.getWithAuth<Card | null>(
-                      `/games/${gameId}/discard-pile/top`,
-                      authToken
-                  );
-                  setDiscardTopCard(card ?? null);
-              } catch (error) {
-                  console.error("Failed to fetch discard pile top card:", error);
-              }
-          };
-
-          fetchDiscardTopCard();
-      }, [apiService, gameId, token]);
 
       // 1st we get userID out of local storage
       const { value: userId } = useLocalStorage<string>("userId", "");
@@ -2823,7 +2800,7 @@ const Game = () => {
           const navigateAfterRound = async () => {
               // Rematch lobby assignment can be slightly delayed after ROUND_ENDED.
               // Retry briefly before falling back to dashboard.
-              for (let attempt = 0; attempt < 10; attempt += 1) {
+              for (let attempt = 0; attempt < 6; attempt += 1) {
                   try {
                       const response = await apiService.getWithAuth<{ sessionId?: string }>(
                           `/games/${gameId}/post-round-lobby`,
@@ -2843,27 +2820,29 @@ const Game = () => {
                       // continue to fallback checks below
                   }
 
-                  try {
-                      const myWaitingLobby = await apiService.getWithAuth<{ sessionId?: string }>(
-                          "/lobbies/my/waiting",
-                          token
-                      );
-                      if (!active) {
-                          return;
+                  if (attempt % 2 === 1) {
+                      try {
+                          const myWaitingLobby = await apiService.getWithAuth<{ sessionId?: string }>(
+                              "/lobbies/my/waiting",
+                              token
+                          );
+                          if (!active) {
+                              return;
+                          }
+                          const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
+                          if (myWaitingSessionId) {
+                              setActiveLobbySessionId(myWaitingSessionId);
+                              setActiveSessionId(myWaitingSessionId);
+                              router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}${spectatorQuerySuffix}`);
+                              return;
+                          }
+                      } catch {
+                          // still waiting for backend handoff
                       }
-                      const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
-                      if (myWaitingSessionId) {
-                          setActiveLobbySessionId(myWaitingSessionId);
-                          setActiveSessionId(myWaitingSessionId);
-                          router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}${spectatorQuerySuffix}`);
-                          return;
-                      }
-                  } catch {
-                      // still waiting for backend handoff
                   }
 
-                  if (attempt < 9) {
-                      await sleep(800);
+                  if (attempt < 5) {
+                      await sleep(1200);
                   }
               }
 
@@ -2989,24 +2968,6 @@ const Game = () => {
       // Drawn-card refresh runs on turn ownership changes; helper refs are intentionally omitted.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [gameId, token, isCurrentTurnMine]);
-
-      // #15: fetch player's hand
-      useEffect(() => {
-        const fetchMyHand = async () => {
-            if (!gameId || !token) return;
-            try {
-                const hand = await apiService.getWithAuth<Card[]>(
-                    `/games/${gameId}/my-hand`,
-                     token
-                );
-                setMyHand(hand);
-            } catch (error) {
-                console.error("Failed to fetch hand:", error);
-            }
-        };
-        fetchMyHand();
-      }, [apiService, gameId, token]);
-
 
 // Disable regular "Draw/Discard" buttons while an ability choice is pending.
 // #26
@@ -3370,10 +3331,6 @@ useEffect(() => {
             refreshOwnHand(gameId, authToken),
             refreshDiscardPileTop(gameId, authToken),
             refreshDrawnCardFromServer(gameId, authToken),
-            fetch(`${getApiDomain()}/heartbeat`, {
-                method: "POST",
-                headers: { Authorization: authToken },
-            }),
         ]);
         lastAuthoritativeResyncMsRef.current = Date.now();
     };
@@ -3397,54 +3354,21 @@ useEffect(() => {
 
 useEffect(() => {
     const authToken = token.trim();
-    if (!gameId || selfUserId == null || !authToken) {
+    if (!gameId || !authToken) {
         return;
     }
 
     let active = true;
+    let followUpTimeoutId: number | null = null;
     consecutiveNotMyTurnPollsRef.current = 0;
     consecutiveNoOwnerProbePollsRef.current = 0;
     const resolveTurnOwnerFromServer = async (): Promise<number | null> => {
-        try {
-            const selfTurn = await apiService.getWithAuth<boolean>(
-                `/games/${encodeURIComponent(gameId)}/is-my-turn/${selfUserId}`,
-                authToken,
-            );
-            if (selfTurn) {
-                return selfUserId;
-            }
-        } catch {
-            // fall back to full ownership probe below
-        }
-
-        const candidateIds = Array.from(
-            new Set(
-                [
-                    ...tablePlayerIdsRef.current,
-                    ...(!isSpectatorMode ? [selfUserId] : []),
-                ].filter((id) => Number.isFinite(id))
-            )
+        const response = await apiService.getWithAuth<{ currentTurnUserId?: number | string | null }>(
+            `/games/${encodeURIComponent(gameId)}/turn-owner`,
+            authToken,
         );
-        if (candidateIds.length === 0) {
-            return null;
-        }
-
-        const checks = await Promise.allSettled(
-            candidateIds.map(async (candidateUserId) => {
-                const isTurn = await apiService.getWithAuth<boolean>(
-                    `/games/${encodeURIComponent(gameId)}/is-my-turn/${candidateUserId}`,
-                    authToken,
-                );
-                return isTurn ? candidateUserId : null;
-            })
-        );
-
-        for (const result of checks) {
-            if (result.status === "fulfilled" && result.value != null) {
-                return result.value;
-            }
-        }
-        return null;
+        const parsedTurnUserId = Number(response?.currentTurnUserId);
+        return Number.isFinite(parsedTurnUserId) ? parsedTurnUserId : null;
     };
 
     const syncTurnOwnership = async () => {
@@ -3487,41 +3411,30 @@ useEffect(() => {
                     nextNoOwnerStreak >= 4;
 
                 if (!shouldDemoteFromNoOwner) {
-                    if (previous === selfUserId) {
-                        consecutiveNotMyTurnPollsRef.current = Math.min(
-                            consecutiveNotMyTurnPollsRef.current + 1,
-                            1,
-                        );
-                        return previous;
-                    }
-                    consecutiveNotMyTurnPollsRef.current = 0;
                     return previous;
                 }
 
-                if (previous === selfUserId) {
-                    currentTurnUserIdRef.current = null;
-                    return null;
-                }
                 consecutiveNotMyTurnPollsRef.current = 0;
                 currentTurnUserIdRef.current = null;
                 return null;
             });
         } catch {
-            // Keep websocket state as-is when poll fails transiently
+            if (!active) {
+                return;
+            }
+            setSocketSynced(false);
         }
     };
 
     const runFocusRecoveryBurst = () => {
         void syncTurnOwnership();
-        let attempts = 0;
-        const burstId = window.setInterval(() => {
-            attempts += 1;
+        if (followUpTimeoutId != null) {
+            window.clearTimeout(followUpTimeoutId);
+        }
+        followUpTimeoutId = window.setTimeout(() => {
             void syncTurnOwnership();
-            if (attempts >= 4) {
-                window.clearInterval(burstId);
-            }
-        }, 450);
-        return burstId;
+            followUpTimeoutId = null;
+        }, 1200);
     };
 
     const handleFocus = () => {
@@ -3538,11 +3451,14 @@ useEffect(() => {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     const intervalId = window.setInterval(
         syncTurnOwnership,
-        socketSynced ? 10000 : 1000
+        socketSynced ? 10000 : 2500
     );
 
     return () => {
         active = false;
+        if (followUpTimeoutId != null) {
+            window.clearTimeout(followUpTimeoutId);
+        }
         window.removeEventListener("focus", handleFocus);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         window.clearInterval(intervalId);
@@ -3556,7 +3472,6 @@ useEffect(() => {
     isAbilityPending,
     isUseAbilitySelected,
     isAbilityChoicePending,
-    isSpectatorMode,
 ]);
 
 useEffect(() => {
@@ -3595,7 +3510,7 @@ useEffect(() => {
     };
 
     void resyncDiscardPileTop();
-    const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 10000 : 1800);
+    const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 10000 : 4500);
     window.addEventListener("pointerdown", handlePageShow, { passive: true });
     window.addEventListener("focus", handlePageShow, { passive: true });
     window.addEventListener("pageshow", handlePageShow, { passive: true });
@@ -3609,36 +3524,6 @@ useEffect(() => {
     };
 // Poll cadence depends on sync state; helper refs are intentionally omitted.
 // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [apiService, gameId, token, socketSynced]);
-
-useEffect(() => {
-    const authToken = token.trim();
-    if (!gameId || !authToken || socketSynced) {
-        return;
-    }
-
-    let active = true;
-    const recoverSyncFromHttp = async () => {
-        try {
-            await apiService.getWithAuth<GameRuntimeConfigResponse>(
-                `/games/${gameId}/config`,
-                authToken
-            );
-            if (!active) {
-                return;
-            }
-            setSocketSynced(true);
-        } catch {
-            // keep waiting for next retry
-        }
-    };
-
-    void recoverSyncFromHttp();
-    const intervalId = window.setInterval(recoverSyncFromHttp, 1500);
-    return () => {
-        active = false;
-        window.clearInterval(intervalId);
-    };
 }, [apiService, gameId, token, socketSynced]);
 
 const clearFlyingCardTimer = () => {
