@@ -18,7 +18,7 @@ import CardComponent from "./components/CardComponent";
 import PeekTimer from "./components/PeekTimer";
 import type { ApplicationError } from "@/types/error";
 import { getStompBrokerUrl } from "@/utils/domain";
-import { Client } from "@stomp/stompjs";
+import { Client, ReconnectionTimeMode, TickerStrategy } from "@stomp/stompjs";
 import SockJS from "sockjs-client";
 import type { User } from "@/types/user";
 import { useRouter } from "next/navigation";
@@ -1367,6 +1367,7 @@ const Game = () => {
       const discardResyncFailureCountRef = useRef<number>(0);
       const discardResyncBackoffUntilMsRef = useRef<number>(0);
       const lastSocketReconnectCatchupMsRef = useRef<number>(0);
+      const gameWsReconnectDelayMsRef = useRef<number>(4500 + Math.floor(Math.random() * 3500));
       const hasSeenCaboCallStateRef = useRef<boolean>(false);
       const previousCaboCalledStateRef = useRef<boolean>(false);
       const previousCaboRevealWinnerStageRef = useRef<boolean>(false);
@@ -1963,7 +1964,12 @@ const Game = () => {
           const client = new Client({
               webSocketFactory: () => new SockJS(getStompBrokerUrl()),
               connectHeaders: { Authorization: authToken },
-              reconnectDelay: 5000,
+              reconnectDelay: gameWsReconnectDelayMsRef.current,
+              reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
+              maxReconnectDelay: 30000,
+              heartbeatIncoming: 20000,
+              heartbeatOutgoing: 20000,
+              heartbeatStrategy: TickerStrategy.Worker,
               onConnect: () => {
                   setSocketSynced(true);
                   const nowMs = Date.now();

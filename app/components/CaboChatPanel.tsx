@@ -10,7 +10,7 @@ import {
 } from "@/utils/chat";
 import { getPrimaryColorHex, normalizePrimaryColorId } from "@/utils/userSettings";
 import { getApiDomain, getStompBrokerUrl } from "@/utils/domain";
-import { Client } from "@stomp/stompjs";
+import { Client, ReconnectionTimeMode, TickerStrategy } from "@stomp/stompjs";
 import { SendOutlined } from "@ant-design/icons";
 import { Button, Input } from "antd";
 import SockJS from "sockjs-client";
@@ -141,6 +141,7 @@ export default function CaboChatPanel({
   const [error, setError] = useState("");
   const [cooldownUntilMs, setCooldownUntilMs] = useState(0);
   const [cooldownNowMs, setCooldownNowMs] = useState(Date.now());
+  const chatWsReconnectDelayMsRef = useRef<number>(5000 + Math.floor(Math.random() * 4000));
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
 
   const usernameColorHexByUserId = useMemo(() => {
@@ -303,7 +304,12 @@ export default function CaboChatPanel({
     const wsClient = new Client({
       webSocketFactory: () => new SockJS(getStompBrokerUrl()),
       connectHeaders: { Authorization: normalizedToken },
-      reconnectDelay: 5000,
+      reconnectDelay: chatWsReconnectDelayMsRef.current,
+      reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
+      maxReconnectDelay: 30000,
+      heartbeatIncoming: 20000,
+      heartbeatOutgoing: 20000,
+      heartbeatStrategy: TickerStrategy.Worker,
       onConnect: () => {
         wsClient.subscribe(`/topic/lobby/session/${normalizedEffectiveSessionId}/chat`, (frame) => {
           try {
