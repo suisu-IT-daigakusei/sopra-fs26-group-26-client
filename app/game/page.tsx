@@ -282,6 +282,17 @@ function isRateLimitedError(error: unknown): boolean {
     return status === 429;
 }
 
+function resolveAdaptiveBackoffMs(
+    failureCount: number,
+    baseDelayMs: number,
+    maxDelayMs: number,
+): number {
+    const boundedFailureCount = Math.max(0, Math.min(8, Math.floor(failureCount)));
+    const exponentialMultiplier = 2 ** boundedFailureCount;
+    const candidateDelay = Math.max(0, Math.floor(baseDelayMs)) * exponentialMultiplier;
+    return Math.min(Math.max(baseDelayMs, candidateDelay), Math.max(baseDelayMs, maxDelayMs));
+}
+
 function normalizeGameStatus(value: unknown): string {
     const normalized = normalizeValue(value);
     if (!normalized) {
@@ -1351,6 +1362,11 @@ const Game = () => {
       const lastAuthoritativeResyncMsRef = useRef<number>(0);
       const turnOwnerProbeInFlightRef = useRef<boolean>(false);
       const discardResyncInFlightRef = useRef<boolean>(false);
+      const turnOwnerProbeFailureCountRef = useRef<number>(0);
+      const turnOwnerProbeBackoffUntilMsRef = useRef<number>(0);
+      const discardResyncFailureCountRef = useRef<number>(0);
+      const discardResyncBackoffUntilMsRef = useRef<number>(0);
+      const lastSocketReconnectCatchupMsRef = useRef<number>(0);
       const hasSeenCaboCallStateRef = useRef<boolean>(false);
       const previousCaboCalledStateRef = useRef<boolean>(false);
       const previousCaboRevealWinnerStageRef = useRef<boolean>(false);
@@ -1950,19 +1966,24 @@ const Game = () => {
               reconnectDelay: 5000,
               onConnect: () => {
                   setSocketSynced(true);
-                  lastGameStateSignalMsRef.current = Date.now();
-                  // Catch up immediately after reconnect in case one or more websocket
-                  // game-state frames were missed while disconnected/backgrounded.
-                  void Promise.allSettled([
-                      refreshSyncState(gameId, authToken),
-                      loadAuthoritativeRematchTiming(authToken),
-                  ]);
-                  const refreshScores = refreshSessionScoresRef.current;
-                  if (refreshScores) {
-                      // Reconnect path: refresh session scores exactly once per websocket reconnect.
-                      void refreshScores().catch(() => {
-                          // best-effort only
-                      });
+                  const nowMs = Date.now();
+                  lastGameStateSignalMsRef.current = nowMs;
+
+                  // Guard against reconnect flapping loops: avoid re-running the full
+                  // HTTP catch-up sequence more than once per short window.
+                  if (nowMs - lastSocketReconnectCatchupMsRef.current >= 15000) {
+                      lastSocketReconnectCatchupMsRef.current = nowMs;
+                      void Promise.allSettled([
+                          refreshSyncState(gameId, authToken),
+                          loadAuthoritativeRematchTiming(authToken),
+                      ]);
+                      const refreshScores = refreshSessionScoresRef.current;
+                      if (refreshScores) {
+                          // Reconnect path: refresh session scores at most once per reconnect window.
+                          void refreshScores().catch(() => {
+                              // best-effort only
+                          });
+                      }
                   }
                   client.subscribe("/user/queue/game-state", (message) => {
                       try {
@@ -2866,6 +2887,7 @@ const Game = () => {
           let active = true;
           const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
           const spectatorQuerySuffix = isSpectatorMode ? "?spectator=1" : "";
+          const postRoundProbeDelaysMs = [0, 900, 1400, 1900, 2500];
           const navigateAfterRound = async () => {
               try {
                   const syncSnapshot = await apiService.getWithAuth<SyncStateResponse>(
@@ -2881,8 +2903,16 @@ const Game = () => {
               }
 
               // Rematch lobby assignment can be slightly delayed after ROUND_ENDED.
-              // Retry briefly before falling back to dashboard.
-              for (let attempt = 0; attempt < 6; attempt += 1) {
+              // Retry with widening intervals to avoid synchronized request bursts.
+              for (let attempt = 0; attempt < postRoundProbeDelaysMs.length; attempt += 1) {
+                  const delayMs = postRoundProbeDelaysMs[attempt];
+                  if (delayMs > 0) {
+                      await sleep(delayMs);
+                  }
+                  if (!active) {
+                      return;
+                  }
+
                   const syncedWaitingSessionId = String(postRoundSessionIdFromSyncRef.current ?? "").trim();
                   if (syncedWaitingSessionId) {
                       setActiveLobbySessionId(syncedWaitingSessionId);
@@ -2907,33 +2937,28 @@ const Game = () => {
                           return;
                       }
                   } catch {
-                      // continue to fallback checks below
+                      // still waiting for backend handoff
                   }
+              }
 
-                  if (attempt % 2 === 1) {
-                      try {
-                          const myWaitingLobby = await apiService.getWithAuth<{ sessionId?: string }>(
-                              "/lobbies/my/waiting",
-                              token
-                          );
-                          if (!active) {
-                              return;
-                          }
-                          const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
-                          if (myWaitingSessionId) {
-                              setActiveLobbySessionId(myWaitingSessionId);
-                              setActiveSessionId(myWaitingSessionId);
-                              router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}${spectatorQuerySuffix}`);
-                              return;
-                          }
-                      } catch {
-                          // still waiting for backend handoff
-                      }
+              // Final fallback: one direct waiting-lobby lookup before dashboard exit.
+              try {
+                  const myWaitingLobby = await apiService.getWithAuth<{ sessionId?: string }>(
+                      "/lobbies/my/waiting",
+                      token
+                  );
+                  if (!active) {
+                      return;
                   }
-
-                  if (attempt < 5) {
-                      await sleep(1200);
+                  const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
+                  if (myWaitingSessionId) {
+                      setActiveLobbySessionId(myWaitingSessionId);
+                      setActiveSessionId(myWaitingSessionId);
+                      router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}${spectatorQuerySuffix}`);
+                      return;
                   }
+              } catch {
+                  // still waiting for backend handoff
               }
 
               if (active) {
@@ -3533,23 +3558,31 @@ useEffect(() => {
     let followUpTimeoutId: number | null = null;
     consecutiveNotMyTurnPollsRef.current = 0;
     consecutiveNoOwnerProbePollsRef.current = 0;
+    turnOwnerProbeFailureCountRef.current = 0;
+    turnOwnerProbeBackoffUntilMsRef.current = 0;
     const resolveTurnOwnerFromServer = async (): Promise<number | null> => {
-        try {
-            return await refreshSyncState(gameId, authToken);
-        } catch (error) {
-            if (isRateLimitedError(error)) {
-                throw error;
-            }
-            const response = await apiService.getWithAuth<{ currentTurnUserId?: number | string | null }>(
-                `/games/${encodeURIComponent(gameId)}/turn-owner`,
-                authToken,
-            );
-            const parsedTurnUserId = Number(response?.currentTurnUserId);
-            return Number.isFinite(parsedTurnUserId) ? parsedTurnUserId : null;
+        const response = await apiService.getWithAuth<{ currentTurnUserId?: number | string | null }>(
+            `/games/${encodeURIComponent(gameId)}/turn-owner`,
+            authToken,
+        );
+        const parsedTurnUserId = Number(response?.currentTurnUserId);
+        if (Number.isFinite(parsedTurnUserId)) {
+            return parsedTurnUserId;
         }
+        if (Date.now() - lastAuthoritativeResyncMsRef.current < 6000) {
+            return null;
+        }
+        return refreshSyncState(gameId, authToken);
     };
 
     const syncTurnOwnership = async () => {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+            return;
+        }
+        const nowMs = Date.now();
+        if (nowMs < turnOwnerProbeBackoffUntilMsRef.current) {
+            return;
+        }
         if (turnOwnerProbeInFlightRef.current) {
             return;
         }
@@ -3562,6 +3595,8 @@ useEffect(() => {
 
             // Successful authoritative HTTP turn probe means we are synced enough to resume input.
             setSocketSynced(true);
+            turnOwnerProbeFailureCountRef.current = 0;
+            turnOwnerProbeBackoffUntilMsRef.current = 0;
 
             setCurrentTurnUserId((previous) => {
                 if (nextTurnUserId != null) {
@@ -3605,12 +3640,20 @@ useEffect(() => {
                 return;
             }
             if (isRateLimitedError(error)) {
+                const nextFailureCount = turnOwnerProbeFailureCountRef.current + 1;
+                turnOwnerProbeFailureCountRef.current = nextFailureCount;
+                const backoffMs = resolveAdaptiveBackoffMs(nextFailureCount, 2500, 20000);
+                turnOwnerProbeBackoffUntilMsRef.current = Date.now() + backoffMs;
                 return;
             }
             const pageVisible = typeof document === "undefined" || document.visibilityState === "visible";
             if (!pageVisible) {
                 return;
             }
+            const nextFailureCount = turnOwnerProbeFailureCountRef.current + 1;
+            turnOwnerProbeFailureCountRef.current = nextFailureCount;
+            const backoffMs = resolveAdaptiveBackoffMs(nextFailureCount, 1500, 30000);
+            turnOwnerProbeBackoffUntilMsRef.current = Date.now() + backoffMs;
             const websocketFreshMs = Date.now() - lastGameStateSignalMsRef.current;
             if (websocketFreshMs > 12000) {
                 setSocketSynced(false);
@@ -3631,7 +3674,7 @@ useEffect(() => {
         followUpTimeoutId = window.setTimeout(() => {
             void syncTurnOwnership();
             followUpTimeoutId = null;
-        }, 1200);
+        }, 2000);
     };
 
     const handleFocus = () => {
@@ -3648,7 +3691,7 @@ useEffect(() => {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     const intervalId = window.setInterval(
         syncTurnOwnership,
-        socketSynced ? 10000 : 2500
+        socketSynced ? 15000 : 6000
     );
 
     return () => {
@@ -3686,13 +3729,21 @@ useEffect(() => {
     if (skipDiscardFallbackPolling) {
         return;
     }
+    discardResyncFailureCountRef.current = 0;
+    discardResyncBackoffUntilMsRef.current = 0;
 
     const resyncDiscardPileTop = async () => {
+        if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+            return;
+        }
+        const now = Date.now();
+        if (now < discardResyncBackoffUntilMsRef.current) {
+            return;
+        }
         if (discardResyncInFlightRef.current) {
             return;
         }
         discardResyncInFlightRef.current = true;
-        const now = Date.now();
         const shouldRunFullResync =
             !socketSynced ||
             now - lastGameStateSignalMsRef.current > 8000 ||
@@ -3705,8 +3756,17 @@ useEffect(() => {
             } else {
                 await refreshDiscardPileTop(gameId, authToken);
             }
+            discardResyncFailureCountRef.current = 0;
+            discardResyncBackoffUntilMsRef.current = 0;
         } catch (error) {
-            if (!isRateLimitedError(error)) {
+            const nextFailureCount = discardResyncFailureCountRef.current + 1;
+            discardResyncFailureCountRef.current = nextFailureCount;
+            if (isRateLimitedError(error)) {
+                const backoffMs = resolveAdaptiveBackoffMs(nextFailureCount, 3000, 20000);
+                discardResyncBackoffUntilMsRef.current = Date.now() + backoffMs;
+            } else {
+                const backoffMs = resolveAdaptiveBackoffMs(nextFailureCount, 1800, 30000);
+                discardResyncBackoffUntilMsRef.current = Date.now() + backoffMs;
                 console.error("Discard fallback resync failed:", error);
             }
         } finally {
@@ -3724,7 +3784,7 @@ useEffect(() => {
     };
 
     void resyncDiscardPileTop();
-    const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 10000 : 4500);
+    const intervalId = window.setInterval(resyncDiscardPileTop, socketSynced ? 15000 : 8000);
     window.addEventListener("focus", handlePageShow, { passive: true });
     window.addEventListener("pageshow", handlePageShow, { passive: true });
     document.addEventListener("visibilitychange", handleVisibilityChange);

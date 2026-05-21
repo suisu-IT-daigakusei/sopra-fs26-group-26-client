@@ -8,7 +8,7 @@ export type CaboSentInviteEntry = {
   toUsername?: string;
 };
 
-const SENT_INVITES_POLL_MS = 3000;
+const SENT_INVITES_POLL_MS = 12000;
 
 type SentRow = {
   toUserId?: unknown;
@@ -74,11 +74,20 @@ export function useOutgoingInviteStatuses(userId: string, token: string) {
     }
     hadCredentialsRef.current = true;
     let active = true;
+    let pollingInFlight = false;
     const pollSent = async () => {
-      if (!active) {
+      if (!active || pollingInFlight) {
         return;
       }
-      await loadSent();
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      pollingInFlight = true;
+      try {
+        await loadSent();
+      } finally {
+        pollingInFlight = false;
+      }
     };
 
     void pollSent();
