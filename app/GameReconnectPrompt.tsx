@@ -6,7 +6,7 @@ import { Button } from "antd";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-const STATUS_POLL_MS = 12000;
+const STATUS_POLL_MS = 60000;
 
 type SelfState = {
   status: string;
@@ -98,6 +98,9 @@ export default function GameReconnectPrompt() {
 
     const refresh = async () => {
       if (pollingInFlight) {
+        return;
+      }
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
         return;
       }
       pollingInFlight = true;

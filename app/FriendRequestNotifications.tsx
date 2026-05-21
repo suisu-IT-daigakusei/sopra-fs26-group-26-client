@@ -12,8 +12,8 @@ type IncomingFriendRequest = {
   requesterUsername: string;
 };
 
-const FRIEND_REQUESTS_POLL_MS = 4000;
-const FRIEND_REQUESTS_POLL_IN_GAME_MS = 12000;
+const FRIEND_REQUESTS_POLL_MS = 15000;
+const FRIEND_REQUESTS_POLL_IN_GAME_MS = 60000;
 
 function normalizePendingRequests(raw: unknown): IncomingFriendRequest[] {
   if (!Array.isArray(raw)) {

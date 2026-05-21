@@ -41,7 +41,7 @@ type UserRow = User & {
 
 const USERS_PAGE_SIZE = 10;
 const FRIEND_ACTION_MIN_LOADING_MS = 800;
-const FRIEND_REQUEST_STATUS_POLL_MS = 4000;
+const FRIEND_REQUEST_STATUS_POLL_MS = 12000;
 
 function resolveSummaryStatusSearchTerm(rawStatus: unknown): string {
   const normalized = String(rawStatus ?? "").trim().toLowerCase();

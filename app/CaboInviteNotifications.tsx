@@ -33,7 +33,7 @@ function normalizePendingRows(raw: unknown): CaboInvitePending[] {
 }
 
 type InviteRespondBody = { waitingLobbySessionId?: string | null };
-const INVITES_POLL_MS = 3000;
+const INVITES_POLL_MS = 12000;
 
 export default function CaboInviteNotifications() {
   const router = useRouter();
