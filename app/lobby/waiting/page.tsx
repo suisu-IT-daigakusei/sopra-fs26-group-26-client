@@ -126,7 +126,7 @@ const MAX_LOBBY_PLAYERS = 4;
 const HOST_CROWN = "\uD83D\uDC51\uFE0E";
 const KICK_ICON = "\u2716";
 const INVITE_PANEL_KEY = "invite-online-players";
-const INVITE_USERS_POLL_MS = 10000;
+const INVITE_USERS_MANUAL_REFRESH_COOLDOWN_MS = 10000;
 const LOBBY_VIEW_POLL_CONNECTED_MS = 10000;
 const LOBBY_VIEW_POLL_DISCONNECTED_MS = 5000;
 const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
@@ -446,6 +446,9 @@ function WaitingLobbyContent() {
   >({});
   const [inviteUsersApi, setInviteUsersApi] = useState<User[]>([]);
   const [isInvitePanelOpen, setIsInvitePanelOpen] = useState(false);
+  const [isInviteUsersRefreshing, setIsInviteUsersRefreshing] = useState(false);
+  const [inviteUsersRefreshLockedUntilMs, setInviteUsersRefreshLockedUntilMs] = useState(0);
+  const [inviteUsersRefreshNowMs, setInviteUsersRefreshNowMs] = useState(Date.now());
   const [inviteSearch, setInviteSearch] = useState("");
   const debouncedInviteSearch = useDebouncedValue(inviteSearch, 1000);
   const [showFriendsOnlyInvites, setShowFriendsOnlyInvites] = useState(false);
@@ -473,9 +476,56 @@ function WaitingLobbyContent() {
   const lobbyAfkWarningLoopActiveRef = useRef<boolean>(false);
   const autoLeaveEmptySpectatorTriggeredRef = useRef<boolean>(false);
 
+  const inviteUsersRefreshRemainingMs = Math.max(0, inviteUsersRefreshLockedUntilMs - inviteUsersRefreshNowMs);
+  const inviteUsersRefreshRemainingSeconds = Math.ceil(inviteUsersRefreshRemainingMs / 1000);
+  const inviteUsersRefreshOnCooldown = inviteUsersRefreshRemainingMs > 0;
+
+  useEffect(() => {
+    if (inviteUsersRefreshLockedUntilMs <= Date.now()) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setInviteUsersRefreshNowMs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [inviteUsersRefreshLockedUntilMs]);
+
   useEffect(() => {
     setSpectatorMode(isSpectatorLobbyView ? "1" : "");
   }, [isSpectatorLobbyView, setSpectatorMode]);
+
+  useEffect(() => {
+    if (!isSpectatorLobbyView) {
+      return;
+    }
+
+    const selfUserId = Number.parseInt(normalizedUserId, 10);
+    if (!Number.isFinite(selfUserId)) {
+      return;
+    }
+
+    const appearsAsPlayer = (view?.players ?? []).some((row) => {
+      if (!row) {
+        return false;
+      }
+      if (row.userId === selfUserId) {
+        return true;
+      }
+      return normalizeValue(row.joinStatus) === "you";
+    });
+    if (!appearsAsPlayer) {
+      return;
+    }
+
+    // Safety net: if server says this user is a player, never keep spectator mode locally.
+    setSpectatorMode("");
+    const normalizedSessionId = sessionIdParam.trim();
+    if (normalizedSessionId) {
+      router.replace(`/lobby/${encodeURIComponent(normalizedSessionId)}`);
+    }
+  }, [isSpectatorLobbyView, normalizedUserId, router, sessionIdParam, setSpectatorMode, view]);
 
   useEffect(() => {
     const uid = normalizedUserId;
@@ -1036,46 +1086,46 @@ function WaitingLobbyContent() {
     };
   }, [api, token]);
 
-  useEffect(() => {
-    if (!userIsHost || !isInvitePanelOpen || typeof window === "undefined") {
+  const refreshInviteUsers = useCallback(async (options?: { manual?: boolean }) => {
+    if (!userIsHost || isSpectatorLobbyView) {
       return;
     }
+    const isManualRefresh = options?.manual === true;
+    const now = Date.now();
+    if (isManualRefresh && now < inviteUsersRefreshLockedUntilMs) {
+      return;
+    }
+    if (isManualRefresh) {
+      setInviteUsersRefreshLockedUntilMs(now + INVITE_USERS_MANUAL_REFRESH_COOLDOWN_MS);
+      setInviteUsersRefreshNowMs(now);
+    }
+    setIsInviteUsersRefreshing(true);
+    try {
+      const allUsers = await api.get<User[]>("/users");
+      setInviteUsersApi(
+        allUsers.filter((user) => {
+          const presence = toPresenceKey(user.status);
+          return (
+            presence === "online" ||
+            presence === "lobby" ||
+            presence === "playing" ||
+            presence === "spectating"
+          );
+        }),
+      );
+    } catch {
+      setInviteUsersApi([]);
+    } finally {
+      setIsInviteUsersRefreshing(false);
+    }
+  }, [api, inviteUsersRefreshLockedUntilMs, isSpectatorLobbyView, userIsHost]);
 
-    let active = true;
-    const refreshInviteUsers = async () => {
-      try {
-        const allUsers = await api.get<User[]>("/users");
-        if (!active) {
-          return;
-        }
-        setInviteUsersApi(
-          allUsers.filter((user) => {
-            const presence = toPresenceKey(user.status);
-            return (
-              presence === "online" ||
-              presence === "lobby" ||
-              presence === "playing" ||
-              presence === "spectating"
-            );
-          }),
-        );
-      } catch {
-        if (active) {
-          setInviteUsersApi([]);
-        }
-      }
-    };
-
+  useEffect(() => {
+    if (!userIsHost || !isInvitePanelOpen) {
+      return;
+    }
     void refreshInviteUsers();
-    const intervalId = window.setInterval(() => {
-      void refreshInviteUsers();
-    }, INVITE_USERS_POLL_MS);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, [api, isInvitePanelOpen, userIsHost]);
+  }, [isInvitePanelOpen, refreshInviteUsers, userIsHost]);
 
   const waitingPlayers = useMemo(
     () =>
@@ -2113,7 +2163,30 @@ function WaitingLobbyContent() {
                 items={[
                   {
                     key: INVITE_PANEL_KEY,
-                    label: "Invite Online Players",
+                    label: (
+                      <div className="lobby-invite-panel-header">
+                        <span className="lobby-invite-panel-header-title">Invite Online Players</span>
+                        <Button
+                          type="default"
+                          size="small"
+                          className="users-refresh-btn lobby-invite-refresh-btn"
+                          loading={isInviteUsersRefreshing}
+                          disabled={isInviteUsersRefreshing || inviteUsersRefreshOnCooldown}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void refreshInviteUsers({ manual: true });
+                          }}
+                          title={inviteUsersRefreshOnCooldown
+                            ? `Refresh available in ${inviteUsersRefreshRemainingSeconds}s`
+                            : "Refresh invite list"}
+                        >
+                          {inviteUsersRefreshOnCooldown
+                            ? `Refresh (${inviteUsersRefreshRemainingSeconds}s)`
+                            : "Refresh"}
+                        </Button>
+                      </div>
+                    ),
                     children: (
                       <List
                         header={

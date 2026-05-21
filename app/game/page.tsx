@@ -1585,6 +1585,16 @@ const Game = () => {
           return unique;
       }, [isSpectatorMode, orderedPlayerIds, selfUserId]);
 
+      useEffect(() => {
+          if (!isSpectatorMode || selfUserId == null) {
+              return;
+          }
+          // Safety net: a real player must never stay in spectator UI mode.
+          if (orderedPlayerIds.includes(selfUserId)) {
+              setSpectatorMode("");
+          }
+      }, [isSpectatorMode, orderedPlayerIds, selfUserId, setSpectatorMode]);
+
       const viewerSeatPlayerId = useMemo(() => {
           if (isSpectatorMode) {
               return gamePlayerIds[0] ?? null;
@@ -2338,7 +2348,8 @@ const Game = () => {
                           // update local storage und navigiere zur neuen Lobby
                           setActiveLobbySessionId(newSessionId);
                           setActiveSessionId(newSessionId);
-                          router.replace(`/lobby/${encodeURIComponent(newSessionId)}`);
+                          const spectatorQuerySuffix = isSpectatorMode ? "?spectator=1" : "";
+                          router.replace(`/lobby/${encodeURIComponent(newSessionId)}${spectatorQuerySuffix}`);
                       } catch {
                           /* ignore malformed payload */
                       }
@@ -3492,6 +3503,8 @@ const resyncTurnActionState = async (
 ) => {
     try {
         await refreshSyncState(activeGameId, authToken);
+        // A successful authoritative sync-state fetch is sufficient to resume input.
+        setSocketSynced(true);
     } catch (error) {
         if (!isRateLimitedError(error)) {
             await Promise.allSettled([
@@ -3542,12 +3555,28 @@ useEffect(() => {
             void resyncOnFocus();
         }
     };
+    const handleOnline = () => {
+        turnOwnerProbeFailureCountRef.current = 0;
+        turnOwnerProbeBackoffUntilMsRef.current = 0;
+        discardResyncFailureCountRef.current = 0;
+        discardResyncBackoffUntilMsRef.current = 0;
+        void resyncOnFocus();
+    };
+    const handleOffline = () => {
+        setSocketSynced(false);
+    };
 
     void resyncOnFocus();
     window.addEventListener("focus", resyncOnFocus, { passive: true });
+    window.addEventListener("pageshow", handleOnline, { passive: true });
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
         window.removeEventListener("focus", resyncOnFocus);
+        window.removeEventListener("pageshow", handleOnline);
+        window.removeEventListener("online", handleOnline);
+        window.removeEventListener("offline", handleOffline);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
 // Resync runs on focus/visibility/game changes; helper refs are intentionally omitted.

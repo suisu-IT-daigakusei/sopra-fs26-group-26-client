@@ -304,6 +304,8 @@ export class ApiService {
       globalThis.localStorage.removeItem("activeSessionId");
       globalThis.localStorage.removeItem("activeLobbySessionId");
       globalThis.localStorage.removeItem("pendingInitialPeekGameId");
+      globalThis.localStorage.removeItem("activeGameStatusSnapshot");
+      globalThis.localStorage.removeItem("spectatorMode");
     } catch {
       // best-effort cleanup only
     }

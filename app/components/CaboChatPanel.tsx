@@ -39,6 +39,14 @@ const QUICK_EMOTES: Array<{ token: string; label: string }> = [
   { token: ":trophy:", label: "\uD83C\uDFC6" },
 ];
 
+const CHAT_SESSION_NOT_FOUND_ERROR = "Chat session not found. Press Resync.";
+const CHAT_SYNC_FAILED_ERROR = "Could not sync chat.";
+const CHAT_SYNC_DELAYED_ERROR = "Chat syncing is delayed. Reconnecting...";
+
+function isTransientSyncError(errorText: string): boolean {
+  return errorText === CHAT_SYNC_FAILED_ERROR || errorText === CHAT_SYNC_DELAYED_ERROR;
+}
+
 function toNumericSequence(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -142,7 +150,12 @@ export default function CaboChatPanel({
   const [cooldownUntilMs, setCooldownUntilMs] = useState(0);
   const [cooldownNowMs, setCooldownNowMs] = useState(Date.now());
   const chatWsReconnectDelayMsRef = useRef<number>(5000 + Math.floor(Math.random() * 4000));
+  const historyFailureCountRef = useRef<number>(0);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+
+  const clearTransientSyncError = useCallback(() => {
+    setError((previous) => (isTransientSyncError(previous) ? "" : previous));
+  }, []);
 
   const usernameColorHexByUserId = useMemo(() => {
     const entries = Object.entries(userPrimaryColorById ?? {});
@@ -163,6 +176,7 @@ export default function CaboChatPanel({
     setMessages([]);
     setError("");
     setCooldownUntilMs(0);
+    historyFailureCountRef.current = 0;
   }, [normalizedSessionId]);
 
   useEffect(() => {
@@ -232,7 +246,8 @@ export default function CaboChatPanel({
         const merged = mergeMessages(previous, Array.isArray(history) ? history : []);
         return areMessageListsEquivalent(previous, merged) ? previous : merged;
       });
-      setError("");
+      historyFailureCountRef.current = 0;
+      clearTransientSyncError();
     } catch (fetchError) {
       const appError = fetchError as ApplicationError;
       const shouldTryRecovery = appError?.status === 403 || appError?.status === 404;
@@ -250,7 +265,8 @@ export default function CaboChatPanel({
               const merged = mergeMessages(previous, Array.isArray(history) ? history : []);
               return areMessageListsEquivalent(previous, merged) ? previous : merged;
             });
-            setError("");
+            historyFailureCountRef.current = 0;
+            clearTransientSyncError();
             recovered = true;
             break;
           } catch {
@@ -262,9 +278,14 @@ export default function CaboChatPanel({
         }
       }
       if (appError?.status === 403 || appError?.status === 404) {
-        setError("Chat session not found. Press Resync.");
+        setError(CHAT_SESSION_NOT_FOUND_ERROR);
+      } else if (appError?.status === 429 || appError?.status >= 500 || appError?.status == null) {
+        historyFailureCountRef.current += 1;
+        if (showSpinner || historyFailureCountRef.current >= 2) {
+          setError(CHAT_SYNC_DELAYED_ERROR);
+        }
       } else {
-        setError("Could not sync chat.");
+        setError(CHAT_SYNC_FAILED_ERROR);
       }
     } finally {
       if (showSpinner) {
@@ -276,6 +297,7 @@ export default function CaboChatPanel({
     getSessionCandidates,
     isReady,
     normalizedEffectiveSessionId,
+    clearTransientSyncError,
   ]);
 
   useEffect(() => {
@@ -311,6 +333,8 @@ export default function CaboChatPanel({
       heartbeatOutgoing: 20000,
       heartbeatStrategy: TickerStrategy.Worker,
       onConnect: () => {
+        historyFailureCountRef.current = 0;
+        clearTransientSyncError();
         wsClient.subscribe(`/topic/lobby/session/${normalizedEffectiveSessionId}/chat`, (frame) => {
           try {
             const payload = JSON.parse(String(frame.body ?? "{}")) as LobbyChatMessage;
@@ -318,6 +342,8 @@ export default function CaboChatPanel({
               const merged = mergeMessages(previous, [payload]);
               return areMessageListsEquivalent(previous, merged) ? previous : merged;
             });
+            historyFailureCountRef.current = 0;
+            clearTransientSyncError();
           } catch {
             // ignore malformed frames
           }
@@ -329,7 +355,7 @@ export default function CaboChatPanel({
     return () => {
       void wsClient.deactivate();
     };
-  }, [isReady, normalizedEffectiveSessionId, normalizedToken]);
+  }, [clearTransientSyncError, isReady, normalizedEffectiveSessionId, normalizedToken]);
 
   useEffect(() => {
     if (!messagesViewportRef.current) {
@@ -419,7 +445,7 @@ export default function CaboChatPanel({
             // try next fallback session
           }
         }
-        setError("Chat session not found. Press Resync.");
+        setError(CHAT_SESSION_NOT_FOUND_ERROR);
       } else {
         setError("Could not send message.");
       }

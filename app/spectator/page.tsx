@@ -8,8 +8,11 @@ import useLocalStorage from "@/hooks/useLocalStorage";
 import type { ApplicationError } from "@/types/error";
 
 type ActiveGameResponse = {
-  gameId?: string | null;
+  gameId?: unknown;
 };
+
+const PRE_JOIN_ACTIVE_GAME_LOOKUP_ATTEMPTS = 2;
+const POST_JOIN_ACTIVE_GAME_LOOKUP_ATTEMPTS = 2;
 
 const SpectatorJoinPage: React.FC = () => {
   const router = useRouter();
@@ -43,11 +46,11 @@ const SpectatorJoinPage: React.FC = () => {
     }
 
     let active = true;
-    const openSpectatorView = async () => {
-      const MAX_ACTIVE_GAME_LOOKUP_ATTEMPTS = 6;
-      for (let attempt = 0; attempt < MAX_ACTIVE_GAME_LOOKUP_ATTEMPTS; attempt += 1) {
+    const resolveActiveGameId = async (maxAttempts: number): Promise<string> => {
+      const attempts = Math.max(1, Math.floor(maxAttempts));
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
         if (!active) {
-          return;
+          return "";
         }
         try {
           const activeGame = await api.getWithAuth<ActiveGameResponse>(
@@ -56,27 +59,52 @@ const SpectatorJoinPage: React.FC = () => {
           );
           const activeGameId = String(activeGame?.gameId ?? "").trim();
           if (activeGameId) {
-            setActiveLobbySessionId(sessionId);
-            setActiveSessionId(activeGameId);
-            setActiveGameStatusSnapshot({ gameId: activeGameId, status: null });
-            router.replace("/game");
-            return;
+            return activeGameId;
           }
         } catch {
           // best-effort active-game lookup only
         }
-        if (attempt < MAX_ACTIVE_GAME_LOOKUP_ATTEMPTS - 1) {
+        if (attempt < attempts - 1) {
           await new Promise((resolve) => window.setTimeout(resolve, 250));
         }
       }
-      if (active) {
-        router.replace(`/lobby/${encodeURIComponent(sessionId)}?spectator=1`);
+      return "";
+    };
+
+    const openSpectatorView = async (activeGameLookupAttempts: number) => {
+      const activeGameId = await resolveActiveGameId(activeGameLookupAttempts);
+      if (!active) {
+        return;
       }
+      if (activeGameId) {
+        // If the user is an active player, force normal game mode.
+        setSpectatorMode("");
+        setActiveLobbySessionId(sessionId);
+        setActiveSessionId(activeGameId);
+        setActiveGameStatusSnapshot({ gameId: activeGameId, status: null });
+        router.replace("/game");
+        return;
+      }
+      setSpectatorMode("1");
+      setActiveLobbySessionId(sessionId);
+      router.replace(`/lobby/${encodeURIComponent(sessionId)}?spectator=1`);
     };
 
     const joinAsSpectator = async () => {
       setLoading(true);
       setError(null);
+      const activeGameId = await resolveActiveGameId(PRE_JOIN_ACTIVE_GAME_LOOKUP_ATTEMPTS);
+      if (!active) {
+        return;
+      }
+      if (activeGameId) {
+        setSpectatorMode("");
+        setActiveLobbySessionId(sessionId);
+        setActiveSessionId(activeGameId);
+        setActiveGameStatusSnapshot({ gameId: activeGameId, status: null });
+        router.replace("/game");
+        return;
+      }
       try {
         await api.postWithAuth(
           `/lobbies/${encodeURIComponent(sessionId)}/spectators`,
@@ -86,8 +114,7 @@ const SpectatorJoinPage: React.FC = () => {
         if (!active) {
           return;
         }
-        setSpectatorMode("1");
-        await openSpectatorView();
+        await openSpectatorView(POST_JOIN_ACTIVE_GAME_LOOKUP_ATTEMPTS);
       } catch (caughtError: unknown) {
         if (!active) {
           return;
@@ -95,8 +122,7 @@ const SpectatorJoinPage: React.FC = () => {
         const status = (caughtError as ApplicationError)?.status;
         const message = caughtError instanceof Error ? caughtError.message : "";
         if (status === 409 && message.toLowerCase().includes("already")) {
-          setSpectatorMode("1");
-          await openSpectatorView();
+          await openSpectatorView(POST_JOIN_ACTIVE_GAME_LOOKUP_ATTEMPTS);
           return;
         }
         if (status === 404) {

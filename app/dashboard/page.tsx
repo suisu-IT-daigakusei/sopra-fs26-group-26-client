@@ -96,6 +96,13 @@ function DashboardContent() {
   const { value: userId, clear: clearUserId } = useLocalStorage<string>("userId", "");
   const { value: token, clear: clearToken } = useLocalStorage<string>("token", "");
   const { set: setSpectatorMode } = useLocalStorage<string>("spectatorMode", "");
+  const { clear: clearActiveSessionId } = useLocalStorage<string>("activeSessionId", "");
+  const { clear: clearActiveLobbySessionId } = useLocalStorage<string>("activeLobbySessionId", "");
+  const { clear: clearPendingInitialPeekGameId } = useLocalStorage<string>("pendingInitialPeekGameId", "");
+  const { clear: clearActiveGameStatusSnapshot } = useLocalStorage<{ gameId?: string | null; status?: string | null } | null>(
+    "activeGameStatusSnapshot",
+    null,
+  );
   const { value: storedPreferredColorPriorityRaw } = useLocalStorage<string[] | string>("preferredColorPriority", []);
   const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
   const normalizedToken = typeof token === "string" ? token.trim() : "";
@@ -278,6 +285,11 @@ function DashboardContent() {
     const authToken = normalizedToken;
 
     // Local-first logout to keep UX instant even if backend/network is slow.
+    setSpectatorMode("");
+    clearActiveSessionId();
+    clearActiveLobbySessionId();
+    clearPendingInitialPeekGameId();
+    clearActiveGameStatusSnapshot();
     clearToken();
     clearUserId();
 

@@ -2,11 +2,12 @@
 
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
+import type { ApplicationError } from "@/types/error";
 import { Button } from "antd";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-const STATUS_POLL_MS = 60000;
+const STATUS_POLL_MS = 20000;
 
 type SelfState = {
   status: string;
@@ -80,8 +81,14 @@ export default function GameReconnectPrompt() {
         return { status: "", gameId: "" };
       }
       return { status: "PLAYING", gameId };
-    } catch {
-      return { status: "", gameId: "" };
+    } catch (error) {
+      const appError = error as Partial<ApplicationError> | undefined;
+      // Keep previous prompt state on transient failures so the reconnect card
+      // does not flap off during backend latency/rate-limit spikes.
+      if (appError?.status === 401 || appError?.status === 403 || appError?.status === 404) {
+        return { status: "", gameId: "" };
+      }
+      return null;
     }
   }, [api, tokenValue, userIdValue]);
 
@@ -125,13 +132,25 @@ export default function GameReconnectPrompt() {
     };
 
     void refresh();
+    const refreshOnVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    };
+    const refreshOnFocus = () => {
+      void refresh();
+    };
     const intervalId = setInterval(() => {
       void refresh();
     }, STATUS_POLL_MS);
+    window.addEventListener("visibilitychange", refreshOnVisible);
+    window.addEventListener("focus", refreshOnFocus, { passive: true });
 
     return () => {
       active = false;
       clearInterval(intervalId);
+      window.removeEventListener("visibilitychange", refreshOnVisible);
+      window.removeEventListener("focus", refreshOnFocus);
     };
   }, [canTrack, loadSelfState, setActiveSessionId]);
 
