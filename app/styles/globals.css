@@ -72,13 +72,21 @@ h1 {
 }
 
 .cabo-background-game {
+  --game-page-vh: 100dvh;
   background-image: var(--cabo-game-background-image);
+  background-attachment: scroll;
   align-items: stretch;
   justify-content: stretch;
+  min-height: var(--game-page-vh);
+  height: var(--game-page-vh);
+  overflow: hidden;
 }
 
-.cabo-background-game > .game-overlay {
+.cabo-background-game > .game-overlay,
+.cabo-background-game > .game-intro-screen,
+.cabo-background-game > .game-cabo-reveal-screen {
   flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* ============================================
@@ -3275,14 +3283,15 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 
 /* Full grey overlay */
 .game-overlay {
-  --game-clamped-vw: min(100vw, calc(100dvh * 21 / 9));
-  --game-clamped-vh: min(100dvh, calc(100vw * 21 / 9));
+  --game-viewport-height: 100dvh;
+  --game-clamped-vw: min(100vw, calc(var(--game-viewport-height) * 21 / 9));
+  --game-clamped-vh: min(var(--game-viewport-height), calc(100vw * 21 / 9));
   --game-col-a: calc(var(--game-clamped-vw) * 0.20);
   --game-col-b: calc(var(--game-clamped-vw) * 0.05);
   --game-col-c: calc(100vw - (2 * var(--game-col-a)) - (2 * var(--game-col-b)));
   --game-row-d: calc(var(--game-clamped-vh) * 0.20);
   --game-row-e: calc(var(--game-clamped-vh) * 0.05);
-  --game-row-c: calc(100vh - (2 * var(--game-row-d)) - (2 * var(--game-row-e)));
+  --game-row-c: calc(var(--game-clamped-vh) - (2 * var(--game-row-d)) - (2 * var(--game-row-e)));
   --game-edge-inset: clamp(6px, 0.9vmin, 14px);
   --game-seat-card-gap: clamp(8px, 1.2vw, 15px);
   --game-seat-card-block-padding: clamp(4px, 0.7vmin, 8px);
@@ -3316,7 +3325,7 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   position: relative;
   width: 100%;
   height: 100dvh;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: rgba(50, 50, 50, 0.8);
   overflow: hidden;
   overscroll-behavior: none;
@@ -6231,6 +6240,10 @@ html.cabo-text-dark .game-center-notification-spectator-peek {
 }
 
 @media (max-width: 900px), (max-aspect-ratio: 10/16) {
+  .cabo-background-game {
+    --game-page-vh: 100svh;
+  }
+
   .game-layout-table {
     inset: max(4px, env(safe-area-inset-top)) 0
       max(10px, calc(env(safe-area-inset-bottom) + 6px)) 0;
@@ -6247,8 +6260,9 @@ html.cabo-text-dark .game-center-notification-spectator-peek {
   }
 
   .game-overlay {
-    height: 100svh;
-    min-height: 100svh;
+    --game-viewport-height: 100svh;
+    height: var(--game-viewport-height);
+    min-height: var(--game-viewport-height);
     padding-top: max(6px, env(safe-area-inset-top));
     padding-bottom: max(6px, env(safe-area-inset-bottom));
   }

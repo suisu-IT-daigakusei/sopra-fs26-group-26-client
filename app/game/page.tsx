@@ -1203,7 +1203,9 @@ const Game = () => {
   const TURN_CARD_DRAG_MIME = "application/x-cabo-turn-card";
   const DISCARD_PILE_SWAP_DRAG_MIME = "application/x-cabo-discard-pile-swap";
   const FLYING_CARD_ANIMATION_MS = 3000; // slower
-  const SESSION_SCORE_REFRESH_MS = 12000;
+  const TURN_ACTION_REQUEST_TIMEOUT_MS = 7000;
+  const DRAWN_CARD_FETCH_TIMEOUT_MS = 5000;
+  const NO_REMATCH_FAST_EXIT_DELAY_MS = 250;
   const createHiddenPeekCards = () => Array(HAND_SIZE).fill(false); // hide card by default
 
 
@@ -1388,6 +1390,9 @@ const Game = () => {
       const caboRevealDeadlineMsRef = useRef<number | null>(null);
       const rematchDeadlineMsRef = useRef<number | null>(null);
       const postRoundSessionIdFromSyncRef = useRef<string>("");
+      const refreshSessionScoresRef = useRef<(() => Promise<void>) | null>(null);
+      const hasFetchedScoresOnEntryRef = useRef<boolean>(false);
+      const hasFetchedScoresOnCaboRevealRef = useRef<boolean>(false);
       const consecutiveNotMyTurnPollsRef = useRef<number>(0);
       const consecutiveNoOwnerProbePollsRef = useRef<number>(0);
       const caboRevealPlayerNameRef = useRef<HTMLParagraphElement | null>(null);
@@ -1952,6 +1957,13 @@ const Game = () => {
                       refreshSyncState(gameId, authToken),
                       loadAuthoritativeRematchTiming(authToken),
                   ]);
+                  const refreshScores = refreshSessionScoresRef.current;
+                  if (refreshScores) {
+                      // Reconnect path: refresh session scores exactly once per websocket reconnect.
+                      void refreshScores().catch(() => {
+                          // best-effort only
+                      });
+                  }
                   client.subscribe("/user/queue/game-state", (message) => {
                       try {
                           const payload = JSON.parse(String(message.body ?? "{}")) as GameStateSignal;
@@ -2551,43 +2563,40 @@ const Game = () => {
       ]);
 
       useEffect(() => {
+          refreshSessionScoresRef.current = refreshSessionScoresFromSessionState;
+      }, [refreshSessionScoresFromSessionState]);
+
+      useEffect(() => {
+          hasFetchedScoresOnEntryRef.current = false;
+          hasFetchedScoresOnCaboRevealRef.current = false;
+      }, [gameId, lobbySessionId]);
+
+      useEffect(() => {
           if (!gameId || !lobbySessionId) {
               return;
           }
+          const isEntryPhase = gameStatus === "intro" || gameStatus === "initial_peek";
+          if (!isEntryPhase || hasFetchedScoresOnEntryRef.current) {
+              return;
+          }
+
+          hasFetchedScoresOnEntryRef.current = true;
           void refreshSessionScoresFromSessionState().catch((error) => {
-              console.error("Could not load session scores:", error);
+              console.error("Could not load session scores on game entry:", error);
           });
-      }, [gameId, lobbySessionId, refreshSessionScoresFromSessionState]);
+      }, [gameId, gameStatus, lobbySessionId, refreshSessionScoresFromSessionState]);
 
       useEffect(() => {
-          if (!gameId || !lobbySessionId) {
+          if (!gameId || !lobbySessionId || gameStatus !== "cabo_reveal") {
+              return;
+          }
+          if (hasFetchedScoresOnCaboRevealRef.current) {
               return;
           }
 
-          const intervalId = window.setInterval(() => {
-              void refreshSessionScoresFromSessionState().catch(() => {
-                  // keep existing scores on transient failures
-              });
-          }, SESSION_SCORE_REFRESH_MS);
-
-          return () => {
-              window.clearInterval(intervalId);
-          };
-      }, [SESSION_SCORE_REFRESH_MS, gameId, lobbySessionId, refreshSessionScoresFromSessionState]);
-
-      useEffect(() => {
-          if (
-              gameStatus !== "cabo_reveal" &&
-              gameStatus !== "round_awaiting_rematch" &&
-              gameStatus !== "round_ended"
-          ) {
-              return;
-          }
-          if (!gameId || !lobbySessionId) {
-              return;
-          }
+          hasFetchedScoresOnCaboRevealRef.current = true;
           void refreshSessionScoresFromSessionState().catch((error) => {
-              console.error("Could not refresh session scores at round boundary:", error);
+              console.error("Could not refresh session scores on cabo reveal entry:", error);
           });
       }, [gameId, gameStatus, lobbySessionId, refreshSessionScoresFromSessionState]);
 
@@ -2819,6 +2828,34 @@ const Game = () => {
           loadAuthoritativeRematchTiming,
           rematchDecisionDuration,
           token,
+      ]);
+
+      useEffect(() => {
+          if (
+              !isAwaitingRematchDecision ||
+              myRematchDecision !== "NONE" ||
+              isSpectatorMode
+          ) {
+              return;
+          }
+
+          const timeoutId = window.setTimeout(() => {
+              setActiveSessionId("");
+              setActiveLobbySessionId("");
+              router.replace("/dashboard");
+          }, NO_REMATCH_FAST_EXIT_DELAY_MS);
+
+          return () => {
+              window.clearTimeout(timeoutId);
+          };
+      }, [
+          isAwaitingRematchDecision,
+          myRematchDecision,
+          isSpectatorMode,
+          router,
+          setActiveLobbySessionId,
+          setActiveSessionId,
+          NO_REMATCH_FAST_EXIT_DELAY_MS,
       ]);
 
       useEffect(() => {
@@ -3916,6 +3953,27 @@ const swapDiscardPileTopWithHand = (targetCardIndex: number) => {
     });
 };
 
+const withClientTimeout = async <T,>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    operationLabel: string,
+): Promise<T> => {
+    let timeoutId: number | null = null;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+            reject(new Error(`${operationLabel} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+    });
+
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        if (timeoutId != null) {
+            window.clearTimeout(timeoutId);
+        }
+    }
+};
+
 const drawFromPile = () => {
     if (!canDrawFromPile || !gameId || !token || drawRequestInFlightRef.current) {
         return;
@@ -3925,14 +3983,22 @@ const drawFromPile = () => {
     setIsDrawingFromPile(true);
     setSelectedDrawSource("draw_pile");
     setHasChosenDrawSourceThisTurn(true);
-    void apiService.postWithAuth(
-        `/games/${gameId}/moves/draw`,
-        {},
-        token
+    void withClientTimeout(
+        apiService.postWithAuth(
+            `/games/${gameId}/moves/draw`,
+            {},
+            token,
+        ),
+        TURN_ACTION_REQUEST_TIMEOUT_MS,
+        "Draw action",
     ).then(() => {
-        return apiService.getWithAuth<unknown>(
-            `/games/${gameId}/drawn-card`,
-            token
+        return withClientTimeout(
+            apiService.getWithAuth<unknown>(
+                `/games/${gameId}/drawn-card`,
+                token,
+            ),
+            DRAWN_CARD_FETCH_TIMEOUT_MS,
+            "Drawn-card sync",
         );
     }).then((rawCard) => {
         const nextDrawnCard = toValidCardOrNull(rawCard);
@@ -3955,15 +4021,23 @@ const drawFromDiscardPile = () => {
     setIsDrawingFromDiscardPile(true);
     setSelectedDrawSource("discard_pile");
     setHasChosenDrawSourceThisTurn(true);
-    void apiService.postWithAuth(
-        `/games/${gameId}/discard-pile/draw`,
-        {},
-        token
+    void withClientTimeout(
+        apiService.postWithAuth(
+            `/games/${gameId}/discard-pile/draw`,
+            {},
+            token,
+        ),
+        TURN_ACTION_REQUEST_TIMEOUT_MS,
+        "Discard-pile draw action",
     ).then(async () => {
         const [rawDrawnCard] = await Promise.all([
-            apiService.getWithAuth<unknown>(
-                `/games/${gameId}/drawn-card`,
-                token
+            withClientTimeout(
+                apiService.getWithAuth<unknown>(
+                    `/games/${gameId}/drawn-card`,
+                    token,
+                ),
+                DRAWN_CARD_FETCH_TIMEOUT_MS,
+                "Drawn-card sync",
             ),
             refreshDiscardPileTop(gameId, token),
             refreshOwnHand(gameId, token),

@@ -41,16 +41,20 @@ export default function CaboInviteNotifications() {
   const api = useApi();
   const { value: token } = useLocalStorage<string>("token", "");
   const { value: userId } = useLocalStorage<string>("userId", "");
+  const { value: spectatorMode } = useLocalStorage<string>("spectatorMode", "");
   const [pending, setPending] = useState<CaboInvitePending[]>([]);
   const [responding, setResponding] = useState(false);
 
   const isAuthRoute =
     pathname === "/" || pathname === "/login";
+  const isGameRoute = pathname?.startsWith("/game") ?? false;
+  const isSpectatorInGame = isGameRoute && spectatorMode.trim() === "1";
+  const shouldSuppressInGameInvites = isGameRoute && !isSpectatorInGame;
 
   const loadPending = useCallback(async () => {
     const t = token.trim();
     const uid = String(userId).trim();
-    if (isAuthRoute || !t || !uid) {
+    if (isAuthRoute || shouldSuppressInGameInvites || !t || !uid) {
       setPending([]);
       return;
     }
@@ -63,12 +67,12 @@ export default function CaboInviteNotifications() {
     } catch {
       setPending([]);
     }
-  }, [api, token, userId, isAuthRoute]);
+  }, [api, token, userId, isAuthRoute, shouldSuppressInGameInvites]);
 
   useEffect(() => {
     const t = token.trim();
     const uid = String(userId).trim();
-    if (isAuthRoute || !t || !uid || typeof window === "undefined") {
+    if (isAuthRoute || shouldSuppressInGameInvites || !t || !uid || typeof window === "undefined") {
       setPending([]);
       return;
     }
@@ -96,7 +100,7 @@ export default function CaboInviteNotifications() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [isAuthRoute, loadPending, token, userId]);
+  }, [isAuthRoute, shouldSuppressInGameInvites, loadPending, token, userId]);
 
   const current = pending[0];
   const [requestAttentionFrame, setRequestAttentionFrame] = useState(1);
@@ -112,12 +116,12 @@ export default function CaboInviteNotifications() {
     if (typeof document === "undefined") {
       return;
     }
-    const inviteActive = Boolean(!isAuthRoute && current);
+    const inviteActive = Boolean(!isAuthRoute && !shouldSuppressInGameInvites && current);
     document.body.classList.toggle("cabo-invite-active", inviteActive);
     return () => {
       document.body.classList.remove("cabo-invite-active");
     };
-  }, [current, isAuthRoute]);
+  }, [current, isAuthRoute, shouldSuppressInGameInvites]);
 
   const confirmLobbySwitchIfNeeded = useCallback(async (): Promise<boolean> => {
     const t = token.trim();
@@ -180,7 +184,7 @@ export default function CaboInviteNotifications() {
     }
   };
 
-  if (isAuthRoute || !current) return null;
+  if (isAuthRoute || shouldSuppressInGameInvites || !current) return null;
 
   return (
     <div className="cabo-invite-corner" role="status" aria-live="polite">
