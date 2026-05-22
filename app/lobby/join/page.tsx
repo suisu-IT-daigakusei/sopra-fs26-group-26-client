@@ -29,8 +29,8 @@ type OpenLobbyRow = {
     isEmptyState?: boolean;
 };
 
-const OPEN_LOBBIES_POLL_MS = 4000; // refresh rate for lobby list, don't do too low or performance eater
 const OPEN_LOBBIES_PAGE_SIZE = 10; // I wouldn't do more, or user has to scroll
+const OPEN_LOBBIES_MANUAL_REFRESH_COOLDOWN_MS = 10_000;
 
 // visual fake row when there are no open lobbies
 const EMPTY_OPEN_LOBBY_ROW: OpenLobbyRow = {
@@ -179,6 +179,8 @@ const LobbyJoin = () => {
     const [joiningSessionId, setJoiningSessionId] = useState<string>("");
     const [selectedOpenLobbySessionId, setSelectedOpenLobbySessionId] = useState<string>("");
     const [hostUsernamesById, setHostUsernamesById] = useState<Record<string, string>>({});
+    const [openLobbiesRefreshLockedUntilMs, setOpenLobbiesRefreshLockedUntilMs] = useState<number>(0);
+    const [refreshClockMs, setRefreshClockMs] = useState<number>(Date.now());
 
     const authToken = token.trim();
     const normalizedUserId = String(userId).trim();
@@ -215,11 +217,33 @@ const LobbyJoin = () => {
 
     useEffect(() => {
         void loadOpenLobbies();
-        const pollId = setInterval(() => {
-            void loadOpenLobbies();
-        }, OPEN_LOBBIES_POLL_MS);
-        return () => clearInterval(pollId);
-    }, [loadOpenLobbies]);
+        // intentionally no auto-polling; refresh is manual only
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        if (openLobbiesRefreshLockedUntilMs <= Date.now()) {
+            return;
+        }
+        const intervalId = window.setInterval(() => {
+            setRefreshClockMs(Date.now());
+        }, 250);
+        return () => {
+            window.clearInterval(intervalId);
+        };
+    }, [openLobbiesRefreshLockedUntilMs]);
+
+    const openLobbiesRefreshRemainingMs = Math.max(0, openLobbiesRefreshLockedUntilMs - refreshClockMs);
+    const openLobbiesRefreshRemainingSeconds = Math.ceil(openLobbiesRefreshRemainingMs / 1000);
+    const canRefreshOpenLobbies = openLobbiesRefreshRemainingMs <= 0 && !loadingOpenLobbies;
+
+    const handleRefreshOpenLobbies = useCallback(async () => {
+        if (!canRefreshOpenLobbies) {
+            return;
+        }
+        setOpenLobbiesRefreshLockedUntilMs(Date.now() + OPEN_LOBBIES_MANUAL_REFRESH_COOLDOWN_MS);
+        await loadOpenLobbies();
+    }, [canRefreshOpenLobbies, loadOpenLobbies]);
 
     const handleBack = () => {
         if (typeof window !== "undefined" && window.history.length > 1) {
@@ -404,12 +428,24 @@ const LobbyJoin = () => {
                         title={
                             <div className="lobby-section-title-row">
                                 <span className="join-card-title-left">Join an Open Game Lobby</span>
-                                <span
-                                    className={`live-connection-symbol ${liveConnected ? "connected" : "disconnected"}`}
-                                    title={liveConnected ? "Connected" : "Disconnected"}
-                                >
-                                    <span className="connection-symbol-dot" aria-hidden="true">{"\u25CF"}</span>
-                                </span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+                                    <Button
+                                        size="small"
+                                        className="users-refresh-btn"
+                                        disabled={!canRefreshOpenLobbies}
+                                        onClick={() => void handleRefreshOpenLobbies()}
+                                    >
+                                        {openLobbiesRefreshRemainingMs > 0
+                                            ? `Refresh (${openLobbiesRefreshRemainingSeconds}s)`
+                                            : "Refresh"}
+                                    </Button>
+                                    <span
+                                        className={`live-connection-symbol ${liveConnected ? "connected" : "disconnected"}`}
+                                        title={liveConnected ? "Connected" : "Disconnected"}
+                                    >
+                                        <span className="connection-symbol-dot" aria-hidden="true">{"\u25CF"}</span>
+                                    </span>
+                                </div>
                             </div>
                         }
                         className="dashboard-container"

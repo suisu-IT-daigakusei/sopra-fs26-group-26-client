@@ -2939,6 +2939,28 @@ const Game = () => {
               setActiveSessionId(normalizedSessionId);
               router.replace(`/lobby/${encodeURIComponent(normalizedSessionId)}${spectatorQuerySuffix}`);
           };
+          const tryJoinableSessionFallback = async (): Promise<boolean> => {
+              if (selfUserId == null || !Number.isFinite(selfUserId)) {
+                  return false;
+              }
+              try {
+                  const me = await apiService.getWithAuth<User>(
+                      `/users/${encodeURIComponent(String(selfUserId))}`,
+                      token,
+                  );
+                  if (!active) {
+                      return true;
+                  }
+                  const joinableSessionId = String(me?.joinableSessionId ?? "").trim();
+                  if (joinableSessionId) {
+                      navigateToLobbySession(joinableSessionId);
+                      return true;
+                  }
+              } catch {
+                  // keep downstream fallbacks
+              }
+              return false;
+          };
           const navigateAfterRound = async () => {
               try {
                   const syncSnapshot = await apiService.getWithAuth<SyncStateResponse>(
@@ -2982,6 +3004,14 @@ const Game = () => {
                   // still waiting for backend handoff
               }
 
+              // Spectators cannot use /lobbies/my/waiting; use joinable-session fallback instead.
+              if (isSpectatorMode) {
+                  const resolvedViaUserLookup = await tryJoinableSessionFallback();
+                  if (resolvedViaUserLookup || !active) {
+                      return;
+                  }
+              }
+
               // Final fallback: one direct waiting-lobby lookup before dashboard exit.
               if (!isSpectatorMode) {
                   try {
@@ -2999,6 +3029,16 @@ const Game = () => {
                       }
                   } catch {
                       // still waiting for backend handoff
+                  }
+              } else {
+                  // One short, jittered grace retry for spectator handoff races.
+                  await sleep(500 + transitionJitterMs);
+                  if (!active) {
+                      return;
+                  }
+                  const resolvedViaUserRetry = await tryJoinableSessionFallback();
+                  if (resolvedViaUserRetry || !active) {
+                      return;
                   }
               }
 

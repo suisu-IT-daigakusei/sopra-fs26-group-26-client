@@ -11,6 +11,7 @@ import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import CharacterAvatar from "@/components/CharacterAvatar";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
+import { getApiDomain } from "@/utils/domain";
 import { deriveUserOutcomeStatsFromHistoryPayload } from "@/utils/userHistoryStats";
 import {
   USER_DEFAULT_PRIORITY_COLORS,
@@ -283,6 +284,17 @@ function DashboardContent() {
   // für logout button:
   const handleLogout = (): void => {
     const authToken = normalizedToken;
+    const apiDomain = getApiDomain();
+
+    if (authToken && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      try {
+        const body = `token=${encodeURIComponent(authToken)}`;
+        const payload = new Blob([body], { type: "application/x-www-form-urlencoded;charset=UTF-8" });
+        navigator.sendBeacon(`${apiDomain}/auth/logout/beacon`, payload);
+      } catch {
+        // fallback to authenticated logout request below
+      }
+    }
 
     // Local-first logout to keep UX instant even if backend/network is slow.
     setSpectatorMode("");
