@@ -1043,14 +1043,25 @@ function WaitingLobbyContent() {
     const pollMs = lobbyWsConnected ? LOBBY_VIEW_POLL_CONNECTED_MS : LOBBY_VIEW_POLL_DISCONNECTED_MS;
     const pollId = setInterval(() => {
       void loadView();
-      void loadSent();
+      if (userIsHost && !isSpectatorLobbyView) {
+        void loadSent();
+      }
       void tryLaunchFromActiveGameFallback();
     }, pollMs);
 
     return () => {
       clearInterval(pollId);
     };
-  }, [token, sessionIdParam, loadView, loadSent, lobbyWsConnected, tryLaunchFromActiveGameFallback]);
+  }, [
+    token,
+    sessionIdParam,
+    loadView,
+    loadSent,
+    lobbyWsConnected,
+    tryLaunchFromActiveGameFallback,
+    userIsHost,
+    isSpectatorLobbyView,
+  ]);
 
   useEffect(() => {
     const authToken = token.trim();

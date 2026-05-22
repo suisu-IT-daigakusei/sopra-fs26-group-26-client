@@ -1585,6 +1585,13 @@ const Game = () => {
           return unique;
       }, [isSpectatorMode, orderedPlayerIds, selfUserId]);
 
+      const viewerIsGameParticipant = useMemo(() => {
+          if (selfUserId == null) {
+              return false;
+          }
+          return orderedPlayerIds.includes(selfUserId);
+      }, [orderedPlayerIds, selfUserId]);
+
       useEffect(() => {
           if (!isSpectatorMode || selfUserId == null) {
               return;
@@ -1595,23 +1602,38 @@ const Game = () => {
           }
       }, [isSpectatorMode, orderedPlayerIds, selfUserId, setSpectatorMode]);
 
+      useEffect(() => {
+          if (isSpectatorMode || selfUserId == null || orderedPlayerIds.length === 0) {
+              return;
+          }
+          // Safety net: non-players should never render in player-seat mode.
+          if (!viewerIsGameParticipant) {
+              setSpectatorMode("1");
+          }
+      }, [isSpectatorMode, orderedPlayerIds.length, selfUserId, setSpectatorMode, viewerIsGameParticipant]);
+
       const viewerSeatPlayerId = useMemo(() => {
-          if (isSpectatorMode) {
+          if (isSpectatorMode || !viewerIsGameParticipant) {
               return gamePlayerIds[0] ?? null;
           }
           if (selfUserId != null) {
               return selfUserId;
           }
           return gamePlayerIds[0] ?? null;
-      }, [gamePlayerIds, isSpectatorMode, selfUserId]);
+      }, [gamePlayerIds, isSpectatorMode, selfUserId, viewerIsGameParticipant]);
 
       const tablePlayerIds = useMemo(() => {
           const unique = [...gamePlayerIds];
-          if (!isSpectatorMode && viewerSeatPlayerId != null && !unique.includes(viewerSeatPlayerId)) {
+          if (
+              !isSpectatorMode &&
+              viewerIsGameParticipant &&
+              viewerSeatPlayerId != null &&
+              !unique.includes(viewerSeatPlayerId)
+          ) {
               unique.push(viewerSeatPlayerId);
           }
           return unique;
-      }, [gamePlayerIds, isSpectatorMode, viewerSeatPlayerId]);
+      }, [gamePlayerIds, isSpectatorMode, viewerIsGameParticipant, viewerSeatPlayerId]);
 
       const seatAssignments = useMemo(() => {
           if (viewerSeatPlayerId == null || tablePlayerIds.length === 0) {
@@ -2904,7 +2926,19 @@ const Game = () => {
           let active = true;
           const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
           const spectatorQuerySuffix = isSpectatorMode ? "?spectator=1" : "";
-          const postRoundProbeDelaysMs = [0, 900, 1400, 1900, 2500];
+          // Spread requests from different clients to avoid synchronized bursts on rematch transition.
+          const transitionJitterMs = selfUserId != null
+              ? Math.abs(selfUserId) % 400
+              : Math.floor(Math.random() * 400);
+          const navigateToLobbySession = (sessionId: string) => {
+              const normalizedSessionId = String(sessionId ?? "").trim();
+              if (!normalizedSessionId) {
+                  return;
+              }
+              setActiveLobbySessionId(normalizedSessionId);
+              setActiveSessionId(normalizedSessionId);
+              router.replace(`/lobby/${encodeURIComponent(normalizedSessionId)}${spectatorQuerySuffix}`);
+          };
           const navigateAfterRound = async () => {
               try {
                   const syncSnapshot = await apiService.getWithAuth<SyncStateResponse>(
@@ -2919,63 +2953,53 @@ const Game = () => {
                   // fall back to dedicated post-round probes
               }
 
-              // Rematch lobby assignment can be slightly delayed after ROUND_ENDED.
-              // Retry with widening intervals to avoid synchronized request bursts.
-              for (let attempt = 0; attempt < postRoundProbeDelaysMs.length; attempt += 1) {
-                  const delayMs = postRoundProbeDelaysMs[attempt];
-                  if (delayMs > 0) {
-                      await sleep(delayMs);
-                  }
-                  if (!active) {
-                      return;
-                  }
-
-                  const syncedWaitingSessionId = String(postRoundSessionIdFromSyncRef.current ?? "").trim();
-                  if (syncedWaitingSessionId) {
-                      setActiveLobbySessionId(syncedWaitingSessionId);
-                      setActiveSessionId(syncedWaitingSessionId);
-                      router.replace(`/lobby/${encodeURIComponent(syncedWaitingSessionId)}${spectatorQuerySuffix}`);
-                      return;
-                  }
-
-                  try {
-                      const response = await apiService.getWithAuth<{ sessionId?: string }>(
-                          `/games/${gameId}/post-round-lobby`,
-                          token
-                      );
-                      if (!active) {
-                          return;
-                      }
-                      const waitingSessionId = String(response?.sessionId ?? "").trim();
-                      if (waitingSessionId) {
-                          setActiveLobbySessionId(waitingSessionId);
-                          setActiveSessionId(waitingSessionId);
-                          router.replace(`/lobby/${encodeURIComponent(waitingSessionId)}${spectatorQuerySuffix}`);
-                          return;
-                      }
-                  } catch {
-                      // still waiting for backend handoff
-                  }
+              const syncedWaitingSessionId = String(postRoundSessionIdFromSyncRef.current ?? "").trim();
+              if (syncedWaitingSessionId) {
+                  navigateToLobbySession(syncedWaitingSessionId);
+                  return;
               }
 
-              // Final fallback: one direct waiting-lobby lookup before dashboard exit.
+              // One delayed post-round lookup with per-client jitter.
+              await sleep(1100 + transitionJitterMs);
+              if (!active) {
+                  return;
+              }
+
               try {
-                  const myWaitingLobby = await apiService.getWithAuth<{ sessionId?: string }>(
-                      "/lobbies/my/waiting",
+                  const response = await apiService.getWithAuth<{ sessionId?: string }>(
+                      `/games/${gameId}/post-round-lobby`,
                       token
                   );
                   if (!active) {
                       return;
                   }
-                  const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
-                  if (myWaitingSessionId) {
-                      setActiveLobbySessionId(myWaitingSessionId);
-                      setActiveSessionId(myWaitingSessionId);
-                      router.replace(`/lobby/${encodeURIComponent(myWaitingSessionId)}${spectatorQuerySuffix}`);
+                  const waitingSessionId = String(response?.sessionId ?? "").trim();
+                  if (waitingSessionId) {
+                      navigateToLobbySession(waitingSessionId);
                       return;
                   }
               } catch {
                   // still waiting for backend handoff
+              }
+
+              // Final fallback: one direct waiting-lobby lookup before dashboard exit.
+              if (!isSpectatorMode) {
+                  try {
+                      const myWaitingLobby = await apiService.getWithAuth<{ sessionId?: string }>(
+                          "/lobbies/my/waiting",
+                          token
+                      );
+                      if (!active) {
+                          return;
+                      }
+                      const myWaitingSessionId = String(myWaitingLobby?.sessionId ?? "").trim();
+                      if (myWaitingSessionId) {
+                          navigateToLobbySession(myWaitingSessionId);
+                          return;
+                      }
+                  } catch {
+                      // still waiting for backend handoff
+                  }
               }
 
               if (active) {
@@ -2987,7 +3011,7 @@ const Game = () => {
           return () => {
               active = false;
           };
-      }, [apiService, gameStatus, gameId, isSpectatorMode, token, router, setActiveLobbySessionId, setActiveSessionId]);
+      }, [apiService, gameStatus, gameId, isSpectatorMode, selfUserId, token, router, setActiveLobbySessionId, setActiveSessionId]);
 
       const isPeekOrSpyPhaseForCountdown =
           gameStatus === "ability_peek_self" ||
@@ -3530,14 +3554,6 @@ useEffect(() => {
         return;
     }
 
-    const skipTurnOwnerFallbackPolling =
-        gameStatus === "cabo_reveal" ||
-        gameStatus === "round_awaiting_rematch" ||
-        gameStatus === "round_ended";
-    if (skipTurnOwnerFallbackPolling) {
-        return;
-    }
-
     const resyncOnFocus = async () => {
         lastActivityMsRef.current = Date.now();
         if (Date.now() - lastAuthoritativeResyncMsRef.current < 1200) {
@@ -3586,6 +3602,13 @@ useEffect(() => {
 useEffect(() => {
     const authToken = token.trim();
     if (!gameId || !authToken) {
+        return;
+    }
+    const skipTurnOwnerFallbackPolling =
+        gameStatus === "cabo_reveal" ||
+        gameStatus === "round_awaiting_rematch" ||
+        gameStatus === "round_ended";
+    if (skipTurnOwnerFallbackPolling) {
         return;
     }
 
@@ -4532,7 +4555,7 @@ const introPhasePlayers = useMemo(() => {
         }
     });
 
-      const combinedIds = [...tablePlayerIds];
+      const combinedIds = [...gamePlayerIds];
       participantFinalScores.forEach((entry) => {
           if (!combinedIds.includes(entry.userId)) {
               combinedIds.push(entry.userId);
@@ -4551,7 +4574,7 @@ const introPhasePlayers = useMemo(() => {
               scoreText: formatPointsLabel(resolvedScore),
           };
       });
-  }, [participantFinalScores, playerNamesById, tablePlayerIds]);
+  }, [gamePlayerIds, participantFinalScores, playerNamesById]);
 
 const INTRO_TITLE_DURATION_MS = 2000;
 const INTRO_PLAYER_REVEAL_INTERVAL_MS = 2000;
@@ -5893,7 +5916,7 @@ const playerListRows = tablePlayerIds.map((id) => {
                               </section>
 
                               <section className="game-layout-zone game-table-cell game-table-cell-bottom-left" aria-label="Chat">
-                                  {!isSpectatorMode ? (
+                                  {!isSpectatorMode && !isRematchScreenPhase ? (
                                       <div className="game-chat-zone-card">
                                           <CaboChatPanel
                                               sessionId={lobbySessionId}

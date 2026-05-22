@@ -1,5 +1,5 @@
 import { useApi } from "@/hooks/useApi";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type CaboInviteSentStatus = "PENDING" | "ACCEPTED" | "DECLINED";
 
@@ -7,8 +7,6 @@ export type CaboSentInviteEntry = {
   status: CaboInviteSentStatus;
   toUsername?: string;
 };
-
-const SENT_INVITES_POLL_MS = 12000;
 
 type SentRow = {
   toUserId?: unknown;
@@ -44,7 +42,6 @@ export function useOutgoingInviteStatuses(userId: string, token: string) {
   const [sentEntries, setSentEntries] = useState<
     Record<string, CaboSentInviteEntry>
   >({});
-  const hadCredentialsRef = useRef(false);
 
   const loadSent = useCallback(async () => {
     const t = token.trim();
@@ -67,39 +64,9 @@ export function useOutgoingInviteStatuses(userId: string, token: string) {
     const t = token.trim();
     const uid = userId.trim();
     if (!t || !uid) {
-      if (hadCredentialsRef.current) {
-        setSentEntries({});
-      }
-      return;
+      setSentEntries({});
     }
-    hadCredentialsRef.current = true;
-    let active = true;
-    let pollingInFlight = false;
-    const pollSent = async () => {
-      if (!active || pollingInFlight) {
-        return;
-      }
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-        return;
-      }
-      pollingInFlight = true;
-      try {
-        await loadSent();
-      } finally {
-        pollingInFlight = false;
-      }
-    };
-
-    void pollSent();
-    const intervalId = window.setInterval(() => {
-      void pollSent();
-    }, SENT_INVITES_POLL_MS);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, [loadSent, token, userId]);
+  }, [token, userId]);
 
   const markPending = useCallback((toUserId: number, toUsername?: string) => {
     const key = String(toUserId);
