@@ -30,7 +30,7 @@ export function getStompBrokerUrl(): string {
   return getApiDomain().replace(/\/+$/, "") + "/ws"; // SockJS uses http/https
 }
 
-/* -> uses raw endpoint
+/* -> uses raw endpoint 
 export function getStompBrokerUrl(): string {
   const base = getApiDomain().replace(/\/+$/, "");
   if (base.startsWith("https://")) {
