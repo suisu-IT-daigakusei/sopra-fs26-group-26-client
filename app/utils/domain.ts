@@ -1,9 +1,6 @@
-import process from "process";
-import { isProduction } from "@/utils/environment";
 /**
- * Returns the API base URL based on the current environment.
- * In production it retrieves the URL from NEXT_PUBLIC_PROD_API_URL (or falls back to a hardcoded url).
- * In development, it returns "http://localhost:8080".
+ * Returns the configured API base URL. Local development uses the backend on
+ * port 8080 by default; hosted builds must set NEXT_PUBLIC_API_URL explicitly.
  */
 export function getApiDomain(): string {
   const explicitUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
@@ -19,10 +16,7 @@ export function getApiDomain(): string {
     }
   }
 
-  const prodUrl = process.env.NEXT_PUBLIC_PROD_API_URL?.trim() ||
-    "https://formal-platform-496911-n8.oa.r.appspot.com";
-  const devUrl = "http://localhost:8080";
-  return isProduction() ? prodUrl : devUrl;
+  return "http://localhost:8080";
 }
 
 // use STOMP endpoint with SockJS

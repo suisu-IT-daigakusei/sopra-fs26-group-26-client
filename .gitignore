@@ -81,7 +81,7 @@ next-env.d.ts
 /.next/
 /out/
 
-# vercel
+# Provider-local metadata (never commit credentials or generated project links)
 .vercel
 
 # Nuxt.js build / generate output

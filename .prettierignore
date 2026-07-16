@@ -1,0 +1,8 @@
+.next/
+node_modules/
+public/
+package-lock.json
+flake.lock
+coverage/
+out/
+build/

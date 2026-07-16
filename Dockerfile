@@ -1,60 +1,64 @@
-# Build image
-FROM node:20 AS build
-# Set container working directory to /app
-WORKDIR /app
-# Copy npm instructions
-COPY package*.json ./
-# Set npm cache to a directory the non-root user can access
-RUN npm config set cache /app/.npm-cache --global
-# Install dependencies with npm ci (exact versions in the lockfile), suppressing warnings
-RUN npm ci --loglevel=error
-# Copy app (useless stuff is ignored by .dockerignore)
-COPY . .
-# Optional build metadata overrides for environments where `.git` is not present in build context
-ARG CABO_CLIENT_BUILD_COMMIT_ID
-ARG CABO_CLIENT_BUILD_COMMIT_TIMESTAMP
-ARG CABO_SERVER_BUILD_COMMIT_ID
-ARG CABO_SERVER_BUILD_COMMIT_TIMESTAMP
-ENV CABO_CLIENT_BUILD_COMMIT_ID=${CABO_CLIENT_BUILD_COMMIT_ID}
-ENV CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${CABO_CLIENT_BUILD_COMMIT_TIMESTAMP}
-ENV CABO_SERVER_BUILD_COMMIT_ID=${CABO_SERVER_BUILD_COMMIT_ID}
-ENV CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${CABO_SERVER_BUILD_COMMIT_TIMESTAMP}
-# Build the app
-ENV NEXT_TELEMETRY_DISABLED=1
-RUN node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build
+# syntax=docker/dockerfile:1
 
-# Use small production image
-FROM node:20-alpine
-# Optional build metadata overrides (must also exist in runtime stage)
+FROM node:24.18.0-alpine AS base
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm install --global npm@12.0.1
+
+FROM base AS dependencies
+COPY package.json package-lock.json .npmrc ./
+RUN npm ci
+
+FROM base AS builder
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY . .
+
+ARG NEXT_PUBLIC_API_URL
 ARG CABO_CLIENT_BUILD_COMMIT_ID
 ARG CABO_CLIENT_BUILD_COMMIT_TIMESTAMP
 ARG CABO_SERVER_BUILD_COMMIT_ID
 ARG CABO_SERVER_BUILD_COMMIT_TIMESTAMP
-# Set the env to "production"
-ENV NODE_ENV=production
+
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV CABO_CLIENT_BUILD_COMMIT_ID=${CABO_CLIENT_BUILD_COMMIT_ID}
 ENV CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${CABO_CLIENT_BUILD_COMMIT_TIMESTAMP}
 ENV CABO_SERVER_BUILD_COMMIT_ID=${CABO_SERVER_BUILD_COMMIT_ID}
 ENV CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${CABO_SERVER_BUILD_COMMIT_TIMESTAMP}
-# Set container working directory to /app
+
+RUN npm run lint \
+    && npm run typecheck \
+    && npm run build
+
+FROM node:24.18.0-alpine AS runner
 WORKDIR /app
-# Set npm cache to a directory the non-root user can access
-RUN npm config set cache /app/.npm-cache --global
-# Install runtime dependencies only
-COPY package*.json ./
-RUN npm ci --omit=dev --loglevel=error
-# Copy app build output
-COPY --chown=3301:3301 --from=build /app/.next .next
-COPY --chown=3301:3301 --from=build /app/public public
-COPY --chown=3301:3301 --from=build /app/package.json package.json
-# Ensure runtime user can write Next.js image/cache directories
-RUN mkdir -p /app/.next/cache/images \
-  && chown -R 3301:3301 /app/.next /app/public /app/.npm-cache /app/node_modules \
-  && chmod -R u+rwX /app/.next
-# Get non-root user
-USER 3301
-# Expose port for serve
+
+ARG NEXT_PUBLIC_API_URL
+ARG CABO_CLIENT_BUILD_COMMIT_ID
+ARG CABO_CLIENT_BUILD_COMMIT_TIMESTAMP
+ARG CABO_SERVER_BUILD_COMMIT_ID
+ARG CABO_SERVER_BUILD_COMMIT_TIMESTAMP
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV CABO_CLIENT_BUILD_COMMIT_ID=${CABO_CLIENT_BUILD_COMMIT_ID}
+ENV CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${CABO_CLIENT_BUILD_COMMIT_TIMESTAMP}
+ENV CABO_SERVER_BUILD_COMMIT_ID=${CABO_SERVER_BUILD_COMMIT_ID}
+ENV CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${CABO_SERVER_BUILD_COMMIT_TIMESTAMP}
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 --ingroup nodejs nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
 EXPOSE 3000
-# Start app
-#CMD [ "npx", "serve", "-s", "build" ]
-CMD [ "node", "./node_modules/next/dist/bin/next", "start" ]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT}/" >/dev/null || exit 1
+
+CMD ["node", "server.js"]

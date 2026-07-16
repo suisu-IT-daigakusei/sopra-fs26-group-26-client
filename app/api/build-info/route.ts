@@ -183,13 +183,11 @@ export async function GET() {
   const clientFromEnv = readBuildInfoFromEnvCandidates(
     [
       "CABO_CLIENT_BUILD_COMMIT_ID",
-      "VERCEL_GIT_COMMIT_SHA",
       "GITHUB_SHA",
       "CI_COMMIT_SHA",
     ],
     [
       "CABO_CLIENT_BUILD_COMMIT_TIMESTAMP",
-      "VERCEL_GIT_COMMIT_TIMESTAMP",
       "GITHUB_EVENT_HEAD_COMMIT_TIMESTAMP",
       "CI_COMMIT_TIMESTAMP",
     ],

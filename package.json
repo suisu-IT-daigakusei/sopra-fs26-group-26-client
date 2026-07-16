@@ -1,34 +1,48 @@
 {
-  "name": "sopra-fs26-template-client",
-  "version": "0.1.0",
+  "name": "cabo-client",
+  "version": "1.9.0",
   "private": true,
+  "packageManager": "npm@12.0.1",
+  "engines": {
+    "node": ">=24.18.0 <25",
+    "npm": ">=12.0.1 <13"
+  },
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "deno lint",
-    "fmt": "deno fmt"
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run typecheck && npm run build"
   },
   "dependencies": {
-    "@ant-design/nextjs-registry": "^1.0.2",
-    "@ant-design/v5-patch-for-react-19": "^1.0.3",
-    "@stomp/stompjs": "^7.3.0",
-    "antd": "^6.0.0",
-    "next": "^15.5.7",
-    "node-localstorage": "^3.0.5",
-    "process": "^0.11.10",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "sockjs-client": "^1.6.1"
+    "@ant-design/icons": "6.3.2",
+    "@ant-design/nextjs-registry": "1.3.0",
+    "@stomp/stompjs": "7.3.0",
+    "antd": "6.5.1",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "sockjs-client": "1.6.1"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.3.0",
-    "@types/node": "^22.13.5",
-    "@types/react": "^19.0.10",
-    "@types/react-dom": "^19.0.4",
-    "@types/sockjs-client": "^1.5.4",
-    "eslint": "^9.21.0",
-    "eslint-config-next": "^15.2.0",
-    "typescript": "^5"
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@types/sockjs-client": "1.5.4",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.10",
+    "prettier": "3.9.5",
+    "typescript": "6.0.3"
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.12.2": true
+  },
+  "overrides": {
+    "postcss": "8.5.10",
+    "websocket-driver": "0.7.5"
   }
 }

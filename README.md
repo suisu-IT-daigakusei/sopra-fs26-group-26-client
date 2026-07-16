@@ -1,5 +1,5 @@
-# Online-CABO
-A web-based multiplayer card game inspired by the classic "Cabo". Where Players must memorize hidden cards, use special abilities, and strategically swap or reveal cards to finish rounds and aim with the lowest total score. This App was built as part of the Software Engineering Lab course (SoPra FS26) at the University of Zurich.
+# Online CABO
+A web-based multiplayer card game inspired by Cabo. Players memorize hidden cards, use special abilities, and strategically swap or reveal cards to finish rounds with the lowest total score. The code originated in a University of Zurich Software Engineering Lab group project and is now independently maintained as a personal project.
 
 ## Introduction
 Goal: Provide a secure, stateful multiplayer backend for Cabo-style rounds—lobbies, live game state, moves, scoring, rematch, friends, and session history—so the web client can stay thin and event-driven.
@@ -32,29 +32,28 @@ Main files: [`app/history/[sessionId]/page.tsx`](app/history/%5BsessionId%5D/pag
 
 The Lobby connects to the Game Engine via WebSocket events. The Game Engine uses CardComponent to render all cards. Authentication feeds the userId and token into every other component via localStorage hooks.
 
-The Lobby connects to the Game Engine via WebSocket events. The Game Engine uses CardComponent to render all cards. Authentication feeds the userId and token into every other component.
-
-
 ## Getting Started
 With the following instructions will get a copy of the project up and running on the local machine. Note: 
 The frontend requires the Spring Boot backend to be running at the same time. Please ensure the backend server is running before starting with the frontend. The API URLs are configured in `app/utils/domain.ts`.
 
 ### Prerequisites
-The following software has to already be installed:
+Install the following software:
 ```
-Node.js (v18 or higher)
-npm (v9 or higher)
+Node.js 24.18.0 LTS
+npm 12.0.1
 Git
 ```
+The exact Node version is also recorded in `.nvmrc` and `.node-version`.
+
 ### Installing
-Clone the folowing repository:
+Clone this repository:
 ```
-git clone https://github.com/liun777/sopra-fs26-group-26-client.git
+git clone https://github.com/suisu-IT-daigakusei/sopra-fs26-group-26-client.git
 cd sopra-fs26-group-26-client
 ```
 Install dependencies:
 ```
-npm install
+npm ci
 ```
 Start the development server:
 
@@ -66,24 +65,26 @@ The app will then be running at:
 http://localhost:3000
 ```
 
-### Prodution Build Check
-To make sure that the production build compiles without errors (mirrors what Vercel runs on deployment) run the following command in the terminal:
+### Production build check
+To verify the optimized production build locally:
 ```
 npm run build
 ```
-## Deployment
-This appl is deployed on **Vercel**. A push to the main-branch triggers the deployment automatically.
-To deploy manually:
+Run the complete static checks and build with:
 ```
-npm run build
-npm run start
+npm run check
 ```
-For containerized deployment, a Dockerfile is provided. Build and run this with the following comman:
+
+## Local container
+This repository has no GitHub workflow that deploys or publishes the application. Pushing a branch does not trigger a repository-controlled deployment. The committed Vercel configuration additionally disables Git-triggered Vercel deployments; disconnect any previously linked project in the provider dashboard as a separate safety check.
+
+The Dockerfile is for explicit local builds and future self-hosting:
 ```
-docker build -t cabo-client .
+docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080 -t cabo-client .
 docker run -p 3000:3000 cabo-client
 ```
-The environment variables for the backend API URL are configured in `app/utils/domain.ts`.
+
+The browser-facing backend URL is controlled by `NEXT_PUBLIC_API_URL`. Without it, the client safely defaults to `http://localhost:8080`; no inherited cloud URL is used. Because public Next.js variables are compiled into the browser bundle, provide the final public backend URL while building a self-hosted image.
 
 
 ## Illustrations
@@ -115,10 +116,9 @@ All cards are revealed face-up. Scores are calculated and displayed. Players can
 * [TypeScript](https://www.typescriptlang.org/) - Strongly typed JavaScript
 * [Ant Design](https://ant.design/) - User Interface component library
 * [SockJS](https://github.com/sockjs/sockjs-client) + [STOMP.js](https://stomp-js.github.io/stomp-websocket/) - Real-time WebSocket communication
-* [Vercel](https://vercel.com/) - Frontend deployment platform
 
 ## API overview
-WebSocket STOMP setup: WebSocketConfig.java.
+HTTP requests are centralized in [`app/api/apiService.ts`](app/api/apiService.ts). Client-side STOMP connections and subscriptions live alongside the lobby, game, and notification features that consume them.
 
 
 
@@ -135,7 +135,7 @@ Top ideas for new contributors:
 * **Jan Alexander Studenski** - Frontend - [@suisu-IT-daigakusei](https://github.com/suisu-IT-daigakusei)
 * **Uliana Solohub** - Backend - [@uIiana](https://github.com/uIiana)
 
-See also the list of [contributors](https://github.com/liun777/sopra-fs26-group-26-client/graphs/contributors) who participated in this project.
+See also the list of [contributors](https://github.com/suisu-IT-daigakusei/sopra-fs26-group-26-client/graphs/contributors) who participated in this project.
 
 ## Acknowledgments
 * Thomas Fritz, Prof. Dr. (course teacher) and the SoPra FS26 teaching assistants at the University of Zurich
@@ -143,6 +143,4 @@ See also the list of [contributors](https://github.com/liun777/sopra-fs26-group-
 * Open-source contributors of all libraries used in this project
 
 ## License
-This project is licensed under the Apache License 2.0 — see [LICENSE](https://github.com/liun777/sopra-fs26-group-26-server/blob/main/LICENSE).
-
-
+This project is licensed under the Apache License 2.0 — see the [server repository license](https://github.com/suisu-IT-daigakusei/sopra-fs26-group-26-server/blob/main/LICENSE).

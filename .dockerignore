@@ -27,5 +27,5 @@ logs
 .vscode-test
 
 # Local / temp
-tmp_vercel_logs
+.env*
 .xcode.env.local
