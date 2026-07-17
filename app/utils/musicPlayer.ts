@@ -17,6 +17,9 @@ export const GAME_MUSIC_TRACK_FILENAMES = Array.from(
   (_, index) => `music_${String(index + 1).padStart(2, "0")}.mp3`,
 );
 
+let configuredMusicFilenamesPromise: Promise<string[]> | null = null;
+const availableMusicTracksPromiseByKey = new Map<string, Promise<MusicTrack[]>>();
+
 function toPositiveInteger(raw: number): number {
   if (!Number.isFinite(raw) || raw <= 0) {
     return 0;
@@ -195,23 +198,33 @@ function normalizeConfiguredMusicFilenames(raw: unknown): string[] {
 export async function fetchConfiguredMusicFilenames(
   fallbackFilenames: string[] = GAME_MUSIC_TRACK_FILENAMES,
 ): Promise<string[]> {
-  try {
-    const response = await fetch("/api/music-options", {
-      method: "GET",
-      cache: "no-store",
-    });
-    if (!response.ok) {
+  if (!configuredMusicFilenamesPromise) {
+    configuredMusicFilenamesPromise = (async () => {
+      try {
+        const response = await fetch("/api/music-options", {
+          method: "GET",
+          cache: "force-cache",
+        });
+        if (!response.ok) {
+          return [...fallbackFilenames];
+        }
+        const payload = await response.json() as { filenames?: unknown };
+        const normalized = normalizeConfiguredMusicFilenames(payload?.filenames);
+        if (normalized.length > 0) {
+          return normalized;
+        }
+      } catch {
+        // fallback to static candidates below
+      }
       return [...fallbackFilenames];
-    }
-    const payload = await response.json() as { filenames?: unknown };
-    const normalized = normalizeConfiguredMusicFilenames(payload?.filenames);
-    if (normalized.length > 0) {
-      return normalized;
-    }
-  } catch {
-    // fallback to static candidates below
+    })();
   }
-  return [...fallbackFilenames];
+  try {
+    return [...await configuredMusicFilenamesPromise];
+  } catch {
+    configuredMusicFilenamesPromise = null;
+    return [...fallbackFilenames];
+  }
 }
 
 function toFallbackTitle(filename: string, index: number): string {
@@ -252,38 +265,11 @@ export function formatVolumeLabel(value: number): string {
   return normalized === 0 ? "Off" : `${normalized}`;
 }
 
-export async function probeMusicTrackAvailability(src: string): Promise<boolean> {
-  try {
-    const headResponse = await fetch(src, {
-      method: "HEAD",
-      cache: "no-store",
-    });
-    if (headResponse.ok) {
-      return true;
-    }
-    if (headResponse.status !== 405) {
-      return false;
-    }
-  } catch {
-    // fall through to range probe
-  }
-  try {
-    const rangeResponse = await fetch(src, {
-      method: "GET",
-      cache: "no-store",
-      headers: { Range: "bytes=0-0" },
-    });
-    return rangeResponse.ok || rangeResponse.status === 206;
-  } catch {
-    return false;
-  }
-}
-
 export async function readMusicTrackMetadataTitle(src: string): Promise<string | null> {
   try {
     const response = await fetch(src, {
       method: "GET",
-      cache: "no-store",
+      cache: "force-cache",
       headers: {
         Range: "bytes=0-65535",
       },
@@ -302,13 +288,16 @@ export async function readMusicTrackMetadataTitle(src: string): Promise<string |
 export async function resolveAvailableMusicTracks(
   filenames: string[] = GAME_MUSIC_TRACK_FILENAMES,
 ): Promise<MusicTrack[]> {
-  const candidates = await Promise.all(
-    filenames.map(async (filename, index) => {
+  const normalizedFilenames = normalizeConfiguredMusicFilenames(filenames);
+  const cacheKey = normalizedFilenames.join("|");
+  const cached = availableMusicTracksPromiseByKey.get(cacheKey);
+  if (cached) {
+    return [...await cached];
+  }
+
+  const pending = Promise.all(
+    normalizedFilenames.map(async (filename, index) => {
       const src = `/${filename}`;
-      const exists = await probeMusicTrackAvailability(src);
-      if (!exists) {
-        return null;
-      }
       const metadataTitle = await readMusicTrackMetadataTitle(src);
       return {
         id: toTrackId(filename, index),
@@ -319,7 +308,19 @@ export async function resolveAvailableMusicTracks(
       } as MusicTrack;
     }),
   );
-  return candidates.filter((track): track is MusicTrack => track != null);
+  availableMusicTracksPromiseByKey.set(cacheKey, pending);
+  while (availableMusicTracksPromiseByKey.size > 4) {
+    const oldestKey = availableMusicTracksPromiseByKey.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    availableMusicTracksPromiseByKey.delete(oldestKey);
+  }
+
+  try {
+    return [...await pending];
+  } catch (error) {
+    availableMusicTracksPromiseByKey.delete(cacheKey);
+    throw error;
+  }
 }
 
 export function filterTracksByBlacklist(tracks: MusicTrack[], rawBlacklist: unknown): MusicTrack[] {

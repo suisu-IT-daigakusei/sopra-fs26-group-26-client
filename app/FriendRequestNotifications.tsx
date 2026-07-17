@@ -94,13 +94,22 @@ export default function FriendRequestNotifications() {
     };
 
     void pollIncoming();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void pollIncoming();
+      }
+    };
     const intervalId = window.setInterval(() => {
       void pollIncoming();
     }, isGameRoute ? FRIEND_REQUESTS_POLL_IN_GAME_MS : FRIEND_REQUESTS_POLL_MS);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible, { passive: true });
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
   }, [isAuthRoute, isGameRoute, loadIncoming, token]);
 

@@ -1,13 +1,15 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7
 
 FROM node:24.18.0-alpine AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm install --global npm@12.0.1
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --global npm@12.0.1
 
 FROM base AS dependencies
 COPY package.json package-lock.json .npmrc ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 
 FROM base AS builder
 COPY --from=dependencies /app/node_modules ./node_modules
@@ -25,7 +27,8 @@ ENV CABO_CLIENT_BUILD_COMMIT_TIMESTAMP=${CABO_CLIENT_BUILD_COMMIT_TIMESTAMP}
 ENV CABO_SERVER_BUILD_COMMIT_ID=${CABO_SERVER_BUILD_COMMIT_ID}
 ENV CABO_SERVER_BUILD_COMMIT_TIMESTAMP=${CABO_SERVER_BUILD_COMMIT_TIMESTAMP}
 
-RUN npm run lint \
+RUN --mount=type=cache,target=/app/.next/cache \
+    npm run lint \
     && npm run typecheck \
     && npm run build
 

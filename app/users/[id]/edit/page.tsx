@@ -23,7 +23,7 @@ const EditPassword: React.FC = () => {
     const apiService = useApi(); // zugriff auf apiservice für Requests ans Backend
     const [form] = Form.useForm();
     const [authRules, setAuthRules] = useState<AuthValidationRules>(getFallbackAuthValidationRules());
-    const { clear: clearToken } = useLocalStorage<string>("token", ""); // um token zu löschen bei ausloggen
+    const { value: token, clear: clearToken } = useLocalStorage<string>("token", ""); // um token zu löschen bei ausloggen
     const { clear: clearUserId } = useLocalStorage<string>("userId", ""); // um userId zu löschen beiausloggen
 
     useEffect(() => {
@@ -50,9 +50,21 @@ const EditPassword: React.FC = () => {
             alert(passwordError);
             return;
         }
+        const authToken = token.trim();
+        const requestedUserId = Array.isArray(params.id)
+            ? String(params.id[0] ?? "").trim()
+            : String(params.id ?? "").trim();
+        if (!authToken || !requestedUserId) {
+            router.replace("/login");
+            return;
+        }
         try {
             // schickt putrequest zum backend mit neuem Passwort
-            await apiService.put(`/users/${params.id}`, { password: password });
+            await apiService.putWithAuth(
+                `/users/${encodeURIComponent(requestedUserId)}`,
+                { password: password },
+                authToken,
+            );
 
             // nach änderung werden token und userid gelöscht
             clearToken();

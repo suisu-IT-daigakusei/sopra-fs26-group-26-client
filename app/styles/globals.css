@@ -5199,6 +5199,8 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 .game-cabo-reveal-special-cell {
   grid-column: 2;
   grid-row: 5;
+  position: relative;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -5224,6 +5226,41 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
     radial-gradient(circle, rgba(255, 160, 160, 0.8) 0%, rgba(255, 160, 160, 0) 64%) 50% 50% / 44px 44px no-repeat,
     radial-gradient(circle, rgba(160, 220, 255, 0.78) 0%, rgba(160, 220, 255, 0) 64%) 92% 50% / 34px 34px no-repeat;
   animation: gameCaboRevealFireworks 900ms ease-in-out infinite alternate;
+}
+
+.game-cabo-reveal-zero-combo-celebration {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  contain: layout paint;
+  will-change: opacity;
+}
+
+.game-cabo-reveal-zero-combo-celebration-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.game-cabo-reveal-zero-combo-text {
+  max-width: min(90vw, 680px);
+  padding: 7px 14px;
+  border: 1px solid rgba(255, 229, 164, 0.72);
+  border-radius: 999px;
+  background: rgba(24, 16, 8, 0.72);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.38);
+  text-align: center;
+  transition: opacity 180ms ease-out;
 }
 
 .game-cabo-reveal-winner-stage {
@@ -5367,6 +5404,13 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
 }
 
 @media (max-width: 600px) {
+  .game-cabo-reveal-zero-combo-text {
+    max-width: 94vw;
+    padding: 6px 10px;
+    font-size: clamp(13px, 4vw, 17px);
+    letter-spacing: 0.035em;
+  }
+
   .game-cabo-reveal-points-result {
     font-size: clamp(18px, 5vw, 28px);
   }
@@ -5379,6 +5423,16 @@ html.cabo-text-dark .cabo-reconnect-corner-title {
   .game-cabo-reveal-winner-stage {
     width: min(94vw, 760px);
     padding: 20px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .game-cabo-reveal-zero-combo-celebration {
+    will-change: auto;
+  }
+
+  .game-cabo-reveal-zero-combo-text {
+    transition: none;
   }
 }
 
@@ -6100,10 +6154,18 @@ html.cabo-text-dark .game-center-notification-spectator-peek {
 }
 
 .game-turn-progress-fill {
+  width: var(--game-turn-progress-start, 0%);
   height: 100%;
   background: #34e27a;
   border-radius: 999px;
-  transition: width 50ms linear;
+  animation-name: game-turn-progress-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes game-turn-progress-countdown {
+  from { width: var(--game-turn-progress-start, 0%); }
+  to { width: 0%; }
 }
 
 .game-turn-progress-label {

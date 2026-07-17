@@ -92,22 +92,22 @@ The browser-facing backend URL is controlled by `NEXT_PUBLIC_API_URL`. Without i
 
 **1. Login / Register**
 Users create an account or log in at `/login` or `/register`. After successful authentication they land on the Dashboard which shows different navigation options such as going to a game, information about the user themselves and also other player as well as the settings where the whole game and interface can be customized.
-<img src="./public/scdashboard.png" width="700"/>
+<img src="./docs/screenshots/scdashboard.png" width="700"/>
 
 **2. Lobby Creation & Joining**
 From the Dashboard players can create a new lobby or join an existing one. Private lobbies are joined via session code, public lobbies via the open lobby list at `/lobby/join`. The host can invite players and configure and customize the game.
 
 **3. Initial Peek Phase**
 At the start of each round all players get a few seconds to peek at exactly two of their own face-down cards. A countdown timer with a progress bar is shown as an overlay.
-<img src="./public/scgame2.png" width="700"/>
+<img src="./docs/screenshots/scgame2.png" width="700"/>
 
 **4. Gameplay**
 Players take turns drawing from the draw pile or discard pile, swapping cards with their hand or using special abilities. Cards 7/8 trigger PEEK, 9/10 trigger SPY and 11/12 trigger SWAP. The active player sees their drawn card — opponents do not. When a player calls Cabo all others get one final turn.
-<img src="./public/scgame.png" width="700"/>
+<img src="./docs/screenshots/scgame.png" width="700"/>
 
 **5. Round End & Scores**
 All cards are revealed face-up. Scores are calculated and displayed. Players can vote to rematch or return to the dashboard. Past sessions are accessible at `/history/{sessionId}`.
-<img src="./public/scwin.png" width="700"/>
+<img src="./docs/screenshots/scwin.png" width="700"/>
 
 
 ## Built With

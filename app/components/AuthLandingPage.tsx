@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Form, Input } from "antd";
 import { beginAuthRouteTransition } from "@/components/authRouteTransition";
+import { preloadAuthRouteLoadingFrames } from "@/components/authRouteLoadingFrames";
 import { useApi } from "@/hooks/useApi";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
@@ -33,6 +34,9 @@ const AuthLandingPage: React.FC = () => {
   const apiService = useApi();
   const [form] = Form.useForm<AuthFormValues>();
   const [authRules, setAuthRules] = useState<AuthValidationRules>(getFallbackAuthValidationRules());
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submissionInFlightRef = useRef(false);
+  const submitAbortControllerRef = useRef<AbortController | null>(null);
   const usernameDraft = Form.useWatch("username", form);
   const passwordDraft = Form.useWatch("password", form);
 
@@ -110,7 +114,20 @@ const AuthLandingPage: React.FC = () => {
     };
   }, [apiService]);
 
+  useEffect(() => () => {
+    submitAbortControllerRef.current?.abort();
+  }, []);
+
   const handleSubmit = async (values: AuthFormValues) => {
+    if (submissionInFlightRef.current) {
+      return;
+    }
+
+    submissionInFlightRef.current = true;
+    setIsSubmitting(true);
+    const abortController = new AbortController();
+    submitAbortControllerRef.current = abortController;
+    void preloadAuthRouteLoadingFrames();
     try {
       let response: User;
       if (isRegister) {
@@ -131,11 +148,15 @@ const AuthLandingPage: React.FC = () => {
             ? normalizedBio
             : "This player hasn't added a bio yet.",
         };
-        response = await apiService.post<User>("/users", payload);
+        response = await apiService.post<User>("/users", payload, {
+          signal: abortController.signal,
+        });
       } else {
         response = await apiService.post<User>("/login", {
           username: values.username,
           password: values.password,
+        }, {
+          signal: abortController.signal,
         });
       }
 
@@ -149,6 +170,9 @@ const AuthLandingPage: React.FC = () => {
       beginAuthRouteTransition("/dashboard", isRegister ? "register" : "login");
       router.replace("/dashboard");
     } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
       if (error instanceof Error) {
         if (isRegister) {
           alert(`Registration failed:\n${error.message}`);
@@ -156,6 +180,12 @@ const AuthLandingPage: React.FC = () => {
           alert("Wrong username or password. Please try again.");
         }
       }
+    } finally {
+      if (submitAbortControllerRef.current === abortController) {
+        submitAbortControllerRef.current = null;
+      }
+      submissionInFlightRef.current = false;
+      setIsSubmitting(false);
     }
   };
 
@@ -298,7 +328,13 @@ const AuthLandingPage: React.FC = () => {
                 </Form.Item>
               ) : null}
               <Form.Item>
-                <Button type="primary" htmlType="submit" className="login-button">
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  className="login-button"
+                  loading={isSubmitting}
+                  disabled={isSubmitting}
+                >
                   {isRegister ? "Register" : "Login"}
                 </Button>
               </Form.Item>
@@ -306,6 +342,7 @@ const AuthLandingPage: React.FC = () => {
                 <Button
                   type="default"
                   className="auth-secondary-nav-btn"
+                  disabled={isSubmitting}
                   onClick={() => setIsRegister((prev) => !prev)}
                 >
                   {isRegister ? "Switch to Login" : "Switch to Register"}

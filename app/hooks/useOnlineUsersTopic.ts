@@ -1,4 +1,5 @@
 import { useApi } from "@/hooks/useApi";
+import { getAllUsersPaged } from "@/api/userDirectory";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import { User } from "@/types/user";
 import { getStompBrokerUrl } from "@/utils/domain";
@@ -54,7 +55,8 @@ function parseOnlineUsersJson(body: string): User[] {
 }
 
 /**
- * First load from existing GET /users; live updates from existing /topic/users/online.
+ * Loads bounded pages through GET /users. The WebSocket topic is a lightweight
+ * invalidation signal; legacy array snapshots remain accepted during rollouts.
  */
 export function useOnlineUsersTopic(): User[] {
   const api = useApi();
@@ -64,20 +66,44 @@ export function useOnlineUsersTopic(): User[] {
   useEffect(() => {
     let cancelled = false;
     let wsConnected = false;
+    let wsSnapshotReceived = false;
+    let restRefreshInFlight = false;
+    let connectedRefreshQueued = false;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const refreshFromRest = async () => {
-      if (wsConnected) {
+    const refreshFromRest = async (allowWhileConnected = false) => {
+      if (restRefreshInFlight) {
+        if (allowWhileConnected) {
+          connectedRefreshQueued = true;
+        }
         return;
       }
+      if (
+        (!allowWhileConnected && wsConnected)
+        || (typeof document !== "undefined" && document.visibilityState !== "visible")
+      ) {
+        return;
+      }
+      restRefreshInFlight = true;
       try {
-        const all = await api.get<User[]>("/users");
-        if (!cancelled) {
+        const all = await getAllUsersPaged(
+          api,
+          { statuses: ["ONLINE", "LOBBY", "PLAYING", "SPECTATING"] },
+          token,
+          () => !cancelled && (allowWhileConnected || (!wsConnected && !wsSnapshotReceived)),
+        );
+        if (!cancelled && (allowWhileConnected || (!wsConnected && !wsSnapshotReceived))) {
           setOnlineUsers(all.filter((u) => isOnlineStatus(u.status)));
         }
       } catch {
-        if (!cancelled) {
-          setOnlineUsers([]);
+        // A transient REST/rate-limit failure must not erase the last known
+        // online snapshot. Initial state is already empty when no snapshot has
+        // ever been received.
+      } finally {
+        restRefreshInFlight = false;
+        if (connectedRefreshQueued && !cancelled) {
+          connectedRefreshQueued = false;
+          void refreshFromRest(true);
         }
       }
     };
@@ -94,6 +120,13 @@ export function useOnlineUsersTopic(): User[] {
       }, ONLINE_USERS_REFRESH_MS);
     };
     scheduleFallbackPoll();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refreshFromRest(wsConnected);
+      }
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible, { passive: true });
     const t = token.trim();
 
     // use SockJS instead of raw WebSocket
@@ -105,21 +138,34 @@ export function useOnlineUsersTopic(): User[] {
         reconnectDelay: 5000,
         onConnect: () => {
           wsConnected = true;
+          void refreshFromRest(true);
           client?.subscribe("/topic/users/online", (msg: IMessage) => {
             if (cancelled) return;
             try {
-              if (msg.body) setOnlineUsers(parseOnlineUsersJson(msg.body));
+              if (msg.body) {
+                const parsed = JSON.parse(msg.body) as unknown;
+                if (Array.isArray(parsed)) {
+                  const parsedUsers = parseOnlineUsersJson(msg.body);
+                  wsSnapshotReceived = true;
+                  setOnlineUsers(parsedUsers);
+                } else {
+                  void refreshFromRest(true);
+                }
+              }
             } catch {}
           });
         },
         onStompError: () => {
           wsConnected = false;
+          wsSnapshotReceived = false;
         },
         onWebSocketClose: () => {
           wsConnected = false;
+          wsSnapshotReceived = false;
         },
         onWebSocketError: () => {
           wsConnected = false;
+          wsSnapshotReceived = false;
         },
       });
       client.activate();
@@ -147,12 +193,15 @@ export function useOnlineUsersTopic(): User[] {
     return () => {
       cancelled = true;
       wsConnected = false;
+      connectedRefreshQueued = false;
       if (pollTimer) {
         clearTimeout(pollTimer);
       }
       if (client) {
         void client.deactivate();
       }
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
   }, [api, token]);
 

@@ -146,6 +146,7 @@ export default function CaboChatPanel({
   const [showEmotes, setShowEmotes] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isResyncing, setIsResyncing] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const [error, setError] = useState("");
   const [cooldownUntilMs, setCooldownUntilMs] = useState(0);
   const [cooldownNowMs, setCooldownNowMs] = useState(Date.now());
@@ -176,6 +177,7 @@ export default function CaboChatPanel({
     setMessages([]);
     setError("");
     setCooldownUntilMs(0);
+    setWsConnected(false);
     historyFailureCountRef.current = 0;
   }, [normalizedSessionId]);
 
@@ -185,7 +187,7 @@ export default function CaboChatPanel({
     }
     const intervalId = window.setInterval(() => {
       setCooldownNowMs(Date.now());
-    }, 120);
+    }, 250);
     return () => {
       window.clearInterval(intervalId);
     };
@@ -308,21 +310,41 @@ export default function CaboChatPanel({
   }, [fetchHistory, isReady]);
 
   useEffect(() => {
-    if (!isReady) {
+    if (!isReady || wsConnected) {
       return;
     }
+    const pollHistory = () => {
+      if (document.visibilityState === "visible") {
+        void fetchHistory(false);
+      }
+    };
     const pollId = window.setInterval(() => {
-      void fetchHistory(false);
+      pollHistory();
     }, 20000);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        pollHistory();
+      }
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible, { passive: true });
     return () => {
       window.clearInterval(pollId);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
-  }, [fetchHistory, isReady]);
+  }, [fetchHistory, isReady, wsConnected]);
 
   useEffect(() => {
     if (!isReady) {
       return;
     }
+    let active = true;
+    const markDisconnected = () => {
+      if (active) {
+        setWsConnected(false);
+      }
+    };
     const wsClient = new Client({
       webSocketFactory: () => new SockJS(getStompBrokerUrl()),
       connectHeaders: { Authorization: normalizedToken },
@@ -333,9 +355,17 @@ export default function CaboChatPanel({
       heartbeatOutgoing: 20000,
       heartbeatStrategy: TickerStrategy.Worker,
       onConnect: () => {
+        if (!active) {
+          return;
+        }
+        setWsConnected(true);
         historyFailureCountRef.current = 0;
         clearTransientSyncError();
+        void fetchHistory(false);
         wsClient.subscribe(`/topic/lobby/session/${normalizedEffectiveSessionId}/chat`, (frame) => {
+          if (!active) {
+            return;
+          }
           try {
             const payload = JSON.parse(String(frame.body ?? "{}")) as LobbyChatMessage;
             setMessages((previous) => {
@@ -349,13 +379,18 @@ export default function CaboChatPanel({
           }
         });
       },
+      onStompError: markDisconnected,
+      onWebSocketClose: markDisconnected,
+      onWebSocketError: markDisconnected,
     });
 
     wsClient.activate();
     return () => {
+      active = false;
+      setWsConnected(false);
       void wsClient.deactivate();
     };
-  }, [clearTransientSyncError, isReady, normalizedEffectiveSessionId, normalizedToken]);
+  }, [clearTransientSyncError, fetchHistory, isReady, normalizedEffectiveSessionId, normalizedToken]);
 
   useEffect(() => {
     if (!messagesViewportRef.current) {

@@ -53,7 +53,7 @@ export default function BackgroundPreferenceSync() {
       try {
         const response = await fetch("/api/background-options", {
           method: "GET",
-          cache: "no-store",
+          cache: "force-cache",
         });
         if (!response.ok) {
           return;

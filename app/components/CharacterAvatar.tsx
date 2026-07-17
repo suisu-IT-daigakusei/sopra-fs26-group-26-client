@@ -170,11 +170,13 @@ const tintedSrcPromiseCache = new Map<string, Promise<string>>();
 const PROFILE_BLINK_MIN_DELAY_MS = 2600;
 const PROFILE_BLINK_MAX_DELAY_MS = 6800;
 const PROFILE_BLINK_CLOSED_MS = 130;
-const TINTED_SRC_CACHE_MAX_ENTRIES = 240;
+const TINTED_SRC_CACHE_MAX_ENTRIES = 96;
 const TINTED_SRC_MAX_DIMENSION_BY_VARIANT: Partial<Record<CharacterAvatarVariant, number>> = {
-  waving: 640,
-  thumbsup: 640,
-  celebration: 720,
+  profile: 512,
+  profile_blink: 512,
+  waving: 384,
+  thumbsup: 384,
+  celebration: 512,
 };
 const CHARACTER_WEARABLE_HEX_BY_COLOR_ID: Record<string, string> = {
   navy_blue: "#1f4ea8",
@@ -705,7 +707,8 @@ export default function CharacterAvatar({
   const [blinkClosed, setBlinkClosed] = useState<boolean>(false);
 
   useEffect(() => {
-    if (!autoBlink || variant !== "profile") {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!autoBlink || variant !== "profile" || reducedMotion) {
       setBlinkClosed(false);
       return;
     }

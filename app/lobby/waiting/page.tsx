@@ -1,6 +1,7 @@
 "use client";
 
 import { useApi } from "@/hooks/useApi";
+import { getUsersPage, UserPageResponse } from "@/api/userDirectory";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
@@ -129,6 +130,7 @@ const INVITE_PANEL_KEY = "invite-online-players";
 const INVITE_USERS_MANUAL_REFRESH_COOLDOWN_MS = 10000;
 const LOBBY_VIEW_POLL_CONNECTED_MS = 10000;
 const LOBBY_VIEW_POLL_DISCONNECTED_MS = 5000;
+const LOBBY_WEBSOCKET_STALE_MS = 30000;
 const DEFAULT_LOBBY_TIMERS: LobbyTimerSettings = {
   afkTimeoutSeconds: 300,
   websocketGraceSeconds: 300,
@@ -309,64 +311,15 @@ function buildPublicLobbyPlayers(
     return [selfRow];
   }
 
-  const onlineById = new Map<number, User>();
+  const candidateRows: Player[] = [];
   for (const user of candidateUsers) {
     if (user.id == null || String(user.id) === selfTrim) {
       continue;
     }
     const id = Number(user.id);
-    if (Number.isFinite(id)) {
-      onlineById.set(id, user);
-    }
-  }
-
-  const activeInviteIds = Object.entries(sentEntries)
-    .filter(([, entry]) => entry.status === "PENDING" || entry.status === "ACCEPTED")
-    .map(([id]) => Number(id))
-    .filter(Number.isFinite)
-    .sort((a, b) => a - b);
-
-  const seen = new Set<number>();
-  const invitedRows: Player[] = [];
-  for (const id of activeInviteIds) {
-    seen.add(id);
-
-    const key = String(id);
-    const user = onlineById.get(id);
-    const inviteStatus = sentEntries[key]?.status;
-    const serverInvited = inviteStatus === "PENDING" || inviteStatus === "ACCEPTED";
-    const inviteRequestPending = inviteLoadingById[key] ?? false;
-
-    const acceptedInvite = inviteStatus === "ACCEPTED";
-    const usernameKey = normalizeValue(sentEntries[key]?.toUsername ?? user?.username);
-    const joined = acceptedInvite && Boolean(usernameKey && joinedByUsername[usernameKey]);
-    const loading = acceptedInvite && !joined;
-
-    const name =
-      sentEntries[key]?.toUsername?.trim() ||
-      user?.username ||
-      user?.name ||
-      `User ${id}`;
-    const rowPresenceKey = toPresenceKey(user?.status);
-
-    invitedRows.push({
-      id,
-      name,
-      invited: serverInvited || inviteRequestPending || loading,
-      loading,
-      presenceKey: rowPresenceKey,
-      presenceLabel: toPresenceLabel(rowPresenceKey),
-      joined,
-    });
-  }
-
-  const otherOnlineRows: Player[] = [];
-  for (const [id, user] of onlineById) {
-    if (seen.has(id)) {
+    if (!Number.isFinite(id)) {
       continue;
     }
-    seen.add(id);
-
     const key = String(id);
     const inviteStatus = sentEntries[key]?.status;
     const serverInvited = inviteStatus === "PENDING" || inviteStatus === "ACCEPTED";
@@ -378,9 +331,9 @@ function buildPublicLobbyPlayers(
     const loading = acceptedInvite && !joined;
     const rowPresenceKey = toPresenceKey(user?.status);
 
-    otherOnlineRows.push({
+    candidateRows.push({
       id,
-      name: user.username ?? user.name ?? "User",
+      name: sentEntries[key]?.toUsername?.trim() || user.username || user.name || `User ${id}`,
       invited: serverInvited || inviteRequestPending || loading,
       loading,
       presenceKey: rowPresenceKey,
@@ -388,9 +341,10 @@ function buildPublicLobbyPlayers(
       joined,
     });
   }
-  otherOnlineRows.sort((a, b) => a.id - b.id);
 
-  return [selfRow, ...invitedRows, ...otherOnlineRows];
+  // Preserve the exact order and membership of the current server page.
+  // Invite state decorates rows but must never reinsert off-page users.
+  return [selfRow, ...candidateRows];
 }
 
 function WaitingLobbyContent() {
@@ -436,6 +390,8 @@ function WaitingLobbyContent() {
   const [spectators, setSpectators] = useState<WaitingRow[]>([]);
 
   const [lobbyWsConnected, setLobbyWsConnected] = useState(false);
+  const lastLobbyFreshnessMsRef = useRef(0);
+  const shouldRefreshSentInvitesRef = useRef(false);
   const [userIsHost, setUserIsHost] = useState(false);
   const [isPublicLobby, setIsPublicLobby] = useState(false);
   const [moveHistoryPublic, setMoveHistoryPublic] = useState<boolean>(true);
@@ -445,14 +401,30 @@ function WaitingLobbyContent() {
     Record<string, boolean>
   >({});
   const [inviteUsersApi, setInviteUsersApi] = useState<User[]>([]);
+  const [inviteUsersPage, setInviteUsersPage] = useState<UserPageResponse | null>(null);
+  const [inviteUsersPageIndex, setInviteUsersPageIndex] = useState(0);
+  const inviteUsersRequestIdRef = useRef(0);
   const [isInvitePanelOpen, setIsInvitePanelOpen] = useState(false);
   const [isInviteUsersRefreshing, setIsInviteUsersRefreshing] = useState(false);
   const [inviteUsersRefreshLockedUntilMs, setInviteUsersRefreshLockedUntilMs] = useState(0);
+  const inviteUsersRefreshLockedUntilMsRef = useRef(0);
   const [inviteUsersRefreshNowMs, setInviteUsersRefreshNowMs] = useState(Date.now());
   const [inviteSearch, setInviteSearch] = useState("");
   const debouncedInviteSearch = useDebouncedValue(inviteSearch, 1000);
   const [showFriendsOnlyInvites, setShowFriendsOnlyInvites] = useState(false);
   const [friendIds, setFriendIds] = useState<string[]>([]);
+  const invitePlayerIdsKey = (view?.players ?? [])
+    .map((player) => String(player.userId ?? "").trim())
+    .filter((id) => id.length > 0)
+    .sort()
+    .join("|");
+  const inviteExcludedUserIds = useMemo(
+    () => [
+      String(normalizedUserId ?? "").trim(),
+      ...invitePlayerIdsKey.split("|").filter((id) => id.length > 0),
+    ].filter((id) => id.length > 0),
+    [invitePlayerIdsKey, normalizedUserId],
+  );
   const [pendingLobbyFriendRequestIds, setPendingLobbyFriendRequestIds] = useState<Record<string, true>>({});
   const [addingLobbyFriendRequestById, setAddingLobbyFriendRequestById] = useState<Record<string, boolean>>({});
   const [lobbyTimerSettings, setLobbyTimerSettings] = useState<LobbyTimerSettings>(DEFAULT_LOBBY_TIMERS);
@@ -495,6 +467,14 @@ function WaitingLobbyContent() {
   useEffect(() => {
     setSpectatorMode(isSpectatorLobbyView ? "1" : "");
   }, [isSpectatorLobbyView, setSpectatorMode]);
+
+  useEffect(() => {
+    const shouldRefresh = userIsHost && !isSpectatorLobbyView;
+    shouldRefreshSentInvitesRef.current = shouldRefresh;
+    if (shouldRefresh) {
+      void loadSent();
+    }
+  }, [isSpectatorLobbyView, loadSent, userIsHost]);
 
   useEffect(() => {
     if (!isSpectatorLobbyView) {
@@ -851,6 +831,7 @@ function WaitingLobbyContent() {
         `/lobbies/waiting/${encodeURIComponent(sessionId)}`,
         authToken,
       );
+      lastLobbyFreshnessMsRef.current = Date.now();
       setView(waitingView);
       const rawSpectators = (waitingView as Record<string, unknown>)?.spectators;
       if (Array.isArray(rawSpectators)) {
@@ -993,12 +974,18 @@ function WaitingLobbyContent() {
         connectHeaders: { Authorization: authToken },
         reconnectDelay: 5000,
         onConnect: () => {
+          lastLobbyFreshnessMsRef.current = Date.now();
           setLobbyWsConnected(true);
           client?.subscribe(`/topic/lobby/session/${sessionId}`, () => {
+            lastLobbyFreshnessMsRef.current = Date.now();
             void loadView();
+            if (shouldRefreshSentInvitesRef.current) {
+              void loadSent();
+            }
             void tryLaunchFromActiveGameFallback();
           });
           client?.subscribe("/user/queue/game-state", (message) => {
+            lastLobbyFreshnessMsRef.current = Date.now();
             try {
               const payload = JSON.parse(String(message.body ?? "{}")) as GameStateSignal;
               launchToGame(extractGameId(payload), extractGameStatus(payload));
@@ -1031,7 +1018,7 @@ function WaitingLobbyContent() {
         void client.deactivate();
       }
     };
-  }, [token, sessionIdParam, loadView, launchToGame, tryLaunchFromActiveGameFallback]);
+  }, [token, sessionIdParam, loadSent, loadView, launchToGame, tryLaunchFromActiveGameFallback]);
 
   useEffect(() => {
     const authToken = token.trim();
@@ -1041,16 +1028,36 @@ function WaitingLobbyContent() {
     }
 
     const pollMs = lobbyWsConnected ? LOBBY_VIEW_POLL_CONNECTED_MS : LOBBY_VIEW_POLL_DISCONNECTED_MS;
-    const pollId = setInterval(() => {
+    const pollFallback = (force: boolean = false) => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      if (
+        !force
+        && lobbyWsConnected
+        && Date.now() - lastLobbyFreshnessMsRef.current < LOBBY_WEBSOCKET_STALE_MS
+      ) {
+        return;
+      }
       void loadView();
       if (userIsHost && !isSpectatorLobbyView) {
         void loadSent();
       }
       void tryLaunchFromActiveGameFallback();
-    }, pollMs);
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        pollFallback(true);
+      }
+    };
+    const pollId = setInterval(pollFallback, pollMs);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible, { passive: true });
 
     return () => {
       clearInterval(pollId);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
   }, [
     token,
@@ -1103,33 +1110,63 @@ function WaitingLobbyContent() {
     }
     const isManualRefresh = options?.manual === true;
     const now = Date.now();
-    if (isManualRefresh && now < inviteUsersRefreshLockedUntilMs) {
+    if (isManualRefresh && now < inviteUsersRefreshLockedUntilMsRef.current) {
       return;
     }
     if (isManualRefresh) {
-      setInviteUsersRefreshLockedUntilMs(now + INVITE_USERS_MANUAL_REFRESH_COOLDOWN_MS);
+      const lockedUntilMs = now + INVITE_USERS_MANUAL_REFRESH_COOLDOWN_MS;
+      inviteUsersRefreshLockedUntilMsRef.current = lockedUntilMs;
+      setInviteUsersRefreshLockedUntilMs(lockedUntilMs);
       setInviteUsersRefreshNowMs(now);
     }
+    const requestId = ++inviteUsersRequestIdRef.current;
     setIsInviteUsersRefreshing(true);
     try {
-      const allUsers = await api.get<User[]>("/users");
-      setInviteUsersApi(
-        allUsers.filter((user) => {
-          const presence = toPresenceKey(user.status);
-          return (
-            presence === "online" ||
-            presence === "lobby" ||
-            presence === "playing" ||
-            presence === "spectating"
-          );
-        }),
+      const usersPage = await getUsersPage(
+        api,
+        {
+          view: "directory",
+          page: inviteUsersPageIndex,
+          size: 10,
+          q: debouncedInviteSearch,
+          friendsOnly: showFriendsOnlyInvites,
+          statuses: ["ONLINE", "LOBBY"],
+          excludeIds: inviteExcludedUserIds.slice(0, 20),
+          sort: "username",
+          direction: "asc",
+        },
+        token,
       );
+      if (requestId !== inviteUsersRequestIdRef.current) {
+        return;
+      }
+      const lastPageIndex = Math.max(0, usersPage.totalPages - 1);
+      if (inviteUsersPageIndex > lastPageIndex) {
+        setInviteUsersPageIndex(lastPageIndex);
+        return;
+      }
+      setInviteUsersPage(usersPage);
+      setInviteUsersApi(usersPage.items);
     } catch {
-      setInviteUsersApi([]);
+      if (requestId === inviteUsersRequestIdRef.current) {
+        setInviteUsersPage(null);
+        setInviteUsersApi([]);
+      }
     } finally {
-      setIsInviteUsersRefreshing(false);
+      if (requestId === inviteUsersRequestIdRef.current) {
+        setIsInviteUsersRefreshing(false);
+      }
     }
-  }, [api, inviteUsersRefreshLockedUntilMs, isSpectatorLobbyView, userIsHost]);
+  }, [
+    api,
+    debouncedInviteSearch,
+    inviteUsersPageIndex,
+    inviteExcludedUserIds,
+    isSpectatorLobbyView,
+    showFriendsOnlyInvites,
+    token,
+    userIsHost,
+  ]);
 
   useEffect(() => {
     if (!userIsHost || !isInvitePanelOpen) {
@@ -1579,30 +1616,11 @@ function WaitingLobbyContent() {
   );
 
   const filteredInviteRows = useMemo(() => {
-    const query = normalizeValue(debouncedInviteSearch);
     return inviteRows
       .filter((player) => !player.isSelf)
       .filter((player) => !usernamesAlreadyInLobby.has(normalizeValue(player.name)))
-      .filter((player) => !player.joined)
-      .filter((player) => {
-        if (!showFriendsOnlyInvites) {
-          return true;
-        }
-        const id = String(player.id ?? "").trim();
-        return id.length > 0 && friendIdSet.has(id);
-      })
-      .filter(
-        (player) =>
-          player.presenceKey !== "offline" &&
-          player.presenceKey !== "playing",
-      )
-      .filter((player) => {
-        if (!query) {
-          return true;
-        }
-        return normalizeValue(player.name).includes(query);
-      });
-  }, [inviteRows, debouncedInviteSearch, usernamesAlreadyInLobby, showFriendsOnlyInvites, friendIdSet]);
+      .filter((player) => !player.joined);
+  }, [inviteRows, usernamesAlreadyInLobby]);
 
   const activeInviteCount = countActiveInvites(sentEntries);
 
@@ -2207,12 +2225,19 @@ function WaitingLobbyContent() {
                               placeholder="Search Players by Username"
                               value={inviteSearch}
                               allowClear
-                              onChange={(event) => setInviteSearch(event.target.value)}
+                              maxLength={64}
+                              onChange={(event) => {
+                                setInviteSearch(event.target.value);
+                                setInviteUsersPageIndex(0);
+                              }}
                             />
                             <Checkbox
                               className="users-overview-filter-toggle"
                               checked={showFriendsOnlyInvites}
-                              onChange={(event) => setShowFriendsOnlyInvites(event.target.checked)}
+                              onChange={(event) => {
+                                setShowFriendsOnlyInvites(event.target.checked);
+                                setInviteUsersPageIndex(0);
+                              }}
                             >
                               Show Friends Only
                             </Checkbox>
@@ -2225,6 +2250,14 @@ function WaitingLobbyContent() {
                             : "No players available",
                         }}
                         rowKey={(player) => String(player.id)}
+                        pagination={{
+                          current: (inviteUsersPage?.page ?? 0) + 1,
+                          pageSize: 10,
+                          total: inviteUsersPage?.totalElements ?? 0,
+                          hideOnSinglePage: true,
+                          showSizeChanger: false,
+                          onChange: (page) => setInviteUsersPageIndex(Math.max(0, page - 1)),
+                        }}
                         renderItem={(player) => (
                           <List.Item className="create-lobby-player-row">
                             <div className="lobby-slot-label">

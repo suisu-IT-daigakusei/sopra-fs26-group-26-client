@@ -26,6 +26,9 @@ logs
 .vscode
 .vscode-test
 
+# Repository documentation is not needed by the production image build
+docs
+
 # Local / temp
 .env*
 .xcode.env.local

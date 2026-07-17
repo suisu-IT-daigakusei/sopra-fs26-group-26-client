@@ -9,6 +9,9 @@ import {
 
 const BACKGROUND_FILE_PATTERN = /^background_(\d+)\.jpe?g$/i;
 
+export const dynamic = "force-static";
+export const revalidate = false;
+
 function toBackgroundLabel(fileName: string): string {
   const match = BACKGROUND_FILE_PATTERN.exec(fileName);
   if (!match) {
@@ -65,8 +68,12 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json({
-    backgrounds: options,
-    availableFiles,
-  });
+  return NextResponse.json(
+    { backgrounds: options, availableFiles },
+    {
+      headers: {
+        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+      },
+    },
+  );
 }

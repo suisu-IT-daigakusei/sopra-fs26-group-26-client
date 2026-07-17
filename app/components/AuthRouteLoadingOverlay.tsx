@@ -9,6 +9,13 @@ import {
   normalizeRoutePath,
   readAuthRouteTransition,
 } from "./authRouteTransition";
+import {
+  GENERAL_LOADING_INTRO_FRAMES,
+  GENERAL_LOADING_LOOP_FRAMES,
+  LOGIN_LOADING_FRAMES,
+  preloadAuthRouteGeneralLoadingFrames,
+  preloadAuthRouteLoadingFrames,
+} from "./authRouteLoadingFrames";
 
 type AuthLoaderStage = "hidden" | "loginOnce" | "generalIntro" | "generalLoop";
 
@@ -17,41 +24,6 @@ const GENERAL_INTRO_FRAME_DURATION_MS = 140;
 const GENERAL_LOOP_FRAME_DURATION_MS = 110;
 const AUTH_ROUTE_TRANSITION_FAILSAFE_MS = 30_000;
 
-const LOGIN_FRAMES: string[] = [
-  "/login_loading_01.png",
-  "/login_loading_02.png",
-  "/login_loading_03.png",
-  "/login_loading_04.png",
-  "/login_loading_05.png",
-  "/login_loading_06.png",
-  "/login_loading_07.png",
-  "/login_loading_08.png",
-  "/login_loading_09.png",
-];
-
-const GENERAL_INTRO_FRAMES: string[] = [
-  "/general_loading_00a.png",
-  "/general_loading_00b.png",
-];
-
-const GENERAL_LOOP_FRAMES: string[] = [
-  "/general_loading_01.png",
-  "/general_loading_02.png",
-  "/general_loading_03.png",
-  "/general_loading_04.png",
-  "/general_loading_05.png",
-  "/general_loading_06.png",
-  "/general_loading_07.png",
-  "/general_loading_08.png",
-];
-
-function preloadFrames(framePaths: string[]): void {
-  for (const src of framePaths) {
-    const image = new Image();
-    image.src = src;
-  }
-}
-
 export default function AuthRouteLoadingOverlay() {
   const pathname = usePathname();
   const [transition, setTransition] = useState<AuthRouteTransition | null>(null);
@@ -59,6 +31,7 @@ export default function AuthRouteLoadingOverlay() {
   const [loginFrameIndex, setLoginFrameIndex] = useState(0);
   const [generalIntroFrameIndex, setGeneralIntroFrameIndex] = useState(0);
   const [generalLoopFrameIndex, setGeneralLoopFrameIndex] = useState(0);
+  const [loginFramesReady, setLoginFramesReady] = useState(false);
 
   const normalizedPath = useMemo(() => normalizeRoutePath(pathname), [pathname]);
 
@@ -89,8 +62,6 @@ export default function AuthRouteLoadingOverlay() {
   }, []);
 
   useEffect(() => {
-    preloadFrames([...LOGIN_FRAMES, ...GENERAL_INTRO_FRAMES, ...GENERAL_LOOP_FRAMES]);
-
     const syncTransition = () => {
       setTransition((previous) => {
         const nextTransition = readAuthRouteTransition();
@@ -118,6 +89,30 @@ export default function AuthRouteLoadingOverlay() {
       window.removeEventListener("storage", syncTransition);
     };
   }, []);
+
+  useEffect(() => {
+    if (!transition) {
+      setLoginFramesReady(false);
+      return;
+    }
+
+    let active = true;
+    setLoginFramesReady(false);
+    void preloadAuthRouteLoadingFrames().then(() => {
+      if (active) {
+        setLoginFramesReady(true);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [transitionKey, transition]);
+
+  useEffect(() => {
+    if (stage === "generalIntro" || stage === "generalLoop") {
+      void preloadAuthRouteGeneralLoadingFrames();
+    }
+  }, [stage]);
 
   useEffect(() => {
     if (!transition) {
@@ -161,10 +156,13 @@ export default function AuthRouteLoadingOverlay() {
     }
 
     if (stage === "loginOnce") {
-      const isLastLoginFrame = loginFrameIndex >= LOGIN_FRAMES.length - 1;
+      if (!loginFramesReady) {
+        return;
+      }
+      const isLastLoginFrame = loginFrameIndex >= LOGIN_LOADING_FRAMES.length - 1;
       const timeoutId = window.setTimeout(() => {
         if (!isLastLoginFrame) {
-          setLoginFrameIndex((current) => Math.min(current + 1, LOGIN_FRAMES.length - 1));
+          setLoginFrameIndex((current) => Math.min(current + 1, LOGIN_LOADING_FRAMES.length - 1));
           return;
         }
         if (transitionSatisfied) {
@@ -180,10 +178,10 @@ export default function AuthRouteLoadingOverlay() {
     }
 
     if (stage === "generalIntro") {
-      const isLastIntroFrame = generalIntroFrameIndex >= GENERAL_INTRO_FRAMES.length - 1;
+      const isLastIntroFrame = generalIntroFrameIndex >= GENERAL_LOADING_INTRO_FRAMES.length - 1;
       const timeoutId = window.setTimeout(() => {
         if (!isLastIntroFrame) {
-          setGeneralIntroFrameIndex((current) => Math.min(current + 1, GENERAL_INTRO_FRAMES.length - 1));
+          setGeneralIntroFrameIndex((current) => Math.min(current + 1, GENERAL_LOADING_INTRO_FRAMES.length - 1));
           return;
         }
 
@@ -206,7 +204,7 @@ export default function AuthRouteLoadingOverlay() {
     }
 
     const timeoutId = window.setTimeout(() => {
-      setGeneralLoopFrameIndex((current) => (current + 1) % GENERAL_LOOP_FRAMES.length);
+      setGeneralLoopFrameIndex((current) => (current + 1) % GENERAL_LOADING_LOOP_FRAMES.length);
     }, GENERAL_LOOP_FRAME_DURATION_MS);
 
     return () => {
@@ -217,6 +215,7 @@ export default function AuthRouteLoadingOverlay() {
     generalIntroFrameIndex,
     generalLoopFrameIndex,
     loginFrameIndex,
+    loginFramesReady,
     stage,
     transition,
     transitionSatisfied,
@@ -224,13 +223,13 @@ export default function AuthRouteLoadingOverlay() {
 
   const currentFrame = useMemo(() => {
     if (stage === "loginOnce") {
-      return LOGIN_FRAMES[loginFrameIndex] ?? LOGIN_FRAMES[LOGIN_FRAMES.length - 1];
+      return LOGIN_LOADING_FRAMES[loginFrameIndex] ?? LOGIN_LOADING_FRAMES[LOGIN_LOADING_FRAMES.length - 1];
     }
     if (stage === "generalIntro") {
-      return GENERAL_INTRO_FRAMES[generalIntroFrameIndex] ?? GENERAL_INTRO_FRAMES[GENERAL_INTRO_FRAMES.length - 1];
+      return GENERAL_LOADING_INTRO_FRAMES[generalIntroFrameIndex] ?? GENERAL_LOADING_INTRO_FRAMES[GENERAL_LOADING_INTRO_FRAMES.length - 1];
     }
     if (stage === "generalLoop") {
-      return GENERAL_LOOP_FRAMES[generalLoopFrameIndex] ?? GENERAL_LOOP_FRAMES[0];
+      return GENERAL_LOADING_LOOP_FRAMES[generalLoopFrameIndex] ?? GENERAL_LOADING_LOOP_FRAMES[0];
     }
     return null;
   }, [generalIntroFrameIndex, generalLoopFrameIndex, loginFrameIndex, stage]);

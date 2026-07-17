@@ -30,6 +30,10 @@ function isGameRoute(pathname: string): boolean {
   return pathname === "/game" || pathname.startsWith("/game/");
 }
 
+function hasRouteOwnedActiveGameTracking(pathname: string): boolean {
+  return pathname === "/lobby/waiting";
+}
+
 export default function GameReconnectPrompt() {
   const api = useApi();
   const router = useRouter();
@@ -51,7 +55,10 @@ export default function GameReconnectPrompt() {
 
   const tokenValue = token.trim();
   const userIdValue = String(userId).trim();
-  const isVisibleRoute = !isAuthRoute(pathname) && !isGameRoute(pathname);
+  const isVisibleRoute =
+    !isAuthRoute(pathname)
+    && !isGameRoute(pathname)
+    && !hasRouteOwnedActiveGameTracking(pathname);
   const canTrack = Boolean(tokenValue && userIdValue && isVisibleRoute);
 
   const reconnectGameId = useMemo(() => {

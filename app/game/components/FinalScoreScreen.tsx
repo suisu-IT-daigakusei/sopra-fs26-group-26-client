@@ -34,6 +34,7 @@ interface FinalScoreScreenProps {
     chatCooldownSeconds?: number;
     totalRounds?: number | null;
     rematchCountdownSeconds: number;
+    sessionEnded: boolean;
     myRematchDecision: RematchDecision | null;
     isSubmittingRematchDecision: boolean;
     onChooseRematch: (decision: RematchDecision) => void;
@@ -162,24 +163,20 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     chatCooldownSeconds = 3,
     totalRounds,
     rematchCountdownSeconds,
+    sessionEnded,
     myRematchDecision,
     isSubmittingRematchDecision,
     onChooseRematch,
     hideRematchSection = false,
 }) => {
-    if (!isOpen) return null;
     // Inline decision confirmation with countdown auto-cancel.
     //   #58
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     const [pendingDecision, setPendingDecision] = React.useState<RematchDecision | null>(null);
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     const [confirmCountdown, setConfirmCountdown] = React.useState<number>(
         DEFAULT_CONFIRM_TIMEOUT_SECONDS,
     );
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     const confirmTimerRef = React.useRef<number | null>(null);
 
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     React.useEffect(() => {
         return () => {
             if (confirmTimerRef.current != null) {
@@ -198,6 +195,9 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
     };
 
     const startConfirm = (decision: RematchDecision) => {
+        if (decision === 'CONTINUE' && sessionEnded) {
+            return;
+        }
         const resolvedConfirmWindowSeconds = resolveConfirmationTimeoutSeconds(
             DEFAULT_CONFIRM_TIMEOUT_SECONDS,
             rematchCountdownSeconds,
@@ -225,8 +225,31 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
 
     // Keep pending confirmation bounded by live backend-derived rematch timer.
     // If the global rematch timer is <= 10s, use that remaining time.
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     React.useEffect(() => {
+        if (!isOpen) {
+            if (confirmTimerRef.current != null) {
+                window.clearInterval(confirmTimerRef.current);
+                confirmTimerRef.current = null;
+            }
+            if (pendingDecision != null) {
+                setPendingDecision(null);
+            }
+            setConfirmCountdown((previous) =>
+                previous === DEFAULT_CONFIRM_TIMEOUT_SECONDS
+                    ? previous
+                    : DEFAULT_CONFIRM_TIMEOUT_SECONDS
+            );
+            return;
+        }
+        if (sessionEnded && pendingDecision === 'CONTINUE') {
+            if (confirmTimerRef.current != null) {
+                window.clearInterval(confirmTimerRef.current);
+                confirmTimerRef.current = null;
+            }
+            setPendingDecision(null);
+            setConfirmCountdown(DEFAULT_CONFIRM_TIMEOUT_SECONDS);
+            return;
+        }
         if (pendingDecision == null) {
             return;
         }
@@ -243,7 +266,9 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
             setPendingDecision(null);
             setConfirmCountdown(DEFAULT_CONFIRM_TIMEOUT_SECONDS);
         }
-    }, [pendingDecision, rematchCountdownSeconds]);
+    }, [isOpen, pendingDecision, rematchCountdownSeconds, sessionEnded]);
+
+    if (!isOpen) return null;
 
     const normalizedPlayers: FinalPlayerResolved[] = players.map((player) => ({
         ...player,
@@ -470,7 +495,9 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         </span>
                     </h2>
                     <p className="final-score-rematch-help">
-                        Continue keeps the same lobby code. Fresh creates a new lobby code.
+                        {sessionEnded
+                            ? 'The configured match has ended. Rematch (Continue) is unavailable; Rematch (Fresh) and No Rematch are still available.'
+                            : 'Continue keeps the same lobby code. Fresh creates a new lobby code.'}
                     </p>
 
                     {/* 10s countdown confirmation after button click (or remaining rematch time if <=10s) */}
@@ -492,7 +519,12 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                                 <Button
                                     type="primary"
                                     loading={isSubmittingRematchDecision}
+                                    disabled={sessionEnded && pendingDecision === 'CONTINUE'}
                                     onClick={() => {
+                                        if (sessionEnded && pendingDecision === 'CONTINUE') {
+                                            clearPendingConfirm();
+                                            return;
+                                        }
                                         onChooseRematch(pendingDecision);
                                         clearPendingConfirm();
                                     }}
@@ -526,7 +558,8 @@ const FinalScoreScreen: React.FC<FinalScoreScreenProps> = ({
                         <Button
                             type={myRematchDecision === "CONTINUE" ? "primary" : "default"}
                             className={`final-score-rematch-btn${!isDecisionLocked ? " final-score-rematch-btn-glow" : ""}${isUrgentCountdown ? " final-score-rematch-btn-urgent" : ""}`}
-                            disabled={isDecisionLocked || pendingDecision !== null}
+                            disabled={sessionEnded || isDecisionLocked || pendingDecision !== null}
+                            title={sessionEnded ? 'The configured match has ended. Start a fresh rematch instead.' : undefined}
                             onClick={() => startConfirm("CONTINUE")}
                         >
                             Rematch (Continue)

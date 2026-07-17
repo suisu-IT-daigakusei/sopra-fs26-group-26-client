@@ -58,6 +58,9 @@ export default function CaboInviteNotifications() {
       setPending([]);
       return;
     }
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      return;
+    }
     try {
       const list = await api.getWithAuth<unknown>(
         `/users/${encodeURIComponent(uid)}/invites`,
@@ -92,13 +95,22 @@ export default function CaboInviteNotifications() {
     };
 
     void pollInvites();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void pollInvites();
+      }
+    };
     const intervalId = window.setInterval(() => {
       void pollInvites();
     }, INVITES_POLL_MS);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible, { passive: true });
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
   }, [isAuthRoute, shouldSuppressInGameInvites, loadPending, token, userId]);
 

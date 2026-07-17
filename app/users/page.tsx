@@ -2,19 +2,24 @@
 // clicking on a user in this list will display /app/users/[id]/page.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
+import {
+  getUsersPage,
+  UserListDirection,
+  UserListSort,
+  UserPageResponse,
+} from "@/api/userDirectory";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
 import { User } from "@/types/user";
 import { PresenceKey, toPresenceKey, toPresenceLabel } from "@/utils/presence";
-import { derivePlayedStatsFromHistoryPayload, UserHistoryPlayedStats } from "@/utils/userHistoryStats";
 import { showTimedConfirmation } from "@/utils/timedConfirmation";
 import { LoadingOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Input, Table } from "antd";
+import { Alert, Button, Card, Checkbox, Input, Table } from "antd";
 import type { TableProps } from "antd";
 
 type UserRow = User & {
@@ -42,6 +47,38 @@ type UserRow = User & {
 const USERS_PAGE_SIZE = 10;
 const FRIEND_ACTION_MIN_LOADING_MS = 800;
 const FRIEND_REQUEST_STATUS_POLL_MS = 12000;
+
+function emptyUserPage(page: number): UserPageResponse {
+  return {
+    items: [],
+    page,
+    size: USERS_PAGE_SIZE,
+    totalElements: 0,
+    totalPages: 0,
+    hasNext: false,
+  };
+}
+
+function toServerSort(columnKey: unknown): UserListSort | null {
+  switch (String(columnKey ?? "")) {
+    case "username":
+      return "username";
+    case "roundsPlayed":
+      return "roundsPlayed";
+    case "averageScore":
+      return "averageScore";
+    case "roundsWonRatePct":
+      return "roundWinRate";
+    case "gamesWonRatePct":
+      return "gamesWinRate";
+    case "status":
+      return "status";
+    case "overallRankValue":
+      return "rank";
+    default:
+      return null;
+  }
+}
 
 function resolveSummaryStatusSearchTerm(rawStatus: unknown): string {
   const normalized = String(rawStatus ?? "").trim().toLowerCase();
@@ -89,10 +126,7 @@ const columns: TableProps<UserRow>["columns"] = [
     align: "left",
     className: "users-username-col",
     width: "42%",
-    sorter: (a, b) =>
-      String(a.username ?? a.name ?? "").localeCompare(
-        String(b.username ?? b.name ?? ""),
-      ),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value, row) => {
       const username = String(value ?? row.name ?? "-").trim() || "-";
@@ -118,7 +152,7 @@ const columns: TableProps<UserRow>["columns"] = [
     dataIndex: "roundsPlayed",
     key: "roundsPlayed",
     align: "center",
-    sorter: (a, b) => (a.roundsPlayed ?? -1) - (b.roundsPlayed ?? -1),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value) => formatMaxOneFractionDigit(value),
   },
@@ -127,7 +161,7 @@ const columns: TableProps<UserRow>["columns"] = [
     dataIndex: "averageScore",
     key: "averageScore",
     align: "center",
-    sorter: (a, b) => (a.averageScore ?? Number.MAX_SAFE_INTEGER) - (b.averageScore ?? Number.MAX_SAFE_INTEGER),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value) => formatMaxOneFractionDigit(value),
   },
@@ -136,7 +170,7 @@ const columns: TableProps<UserRow>["columns"] = [
     dataIndex: "roundsWonRatePct",
     key: "roundsWonRatePct",
     align: "center",
-    sorter: (a, b) => (a.roundsWonRatePct ?? -1) - (b.roundsWonRatePct ?? -1),
+    sorter: true,
     sortDirections: ["ascend", "descend", "ascend"],
     render: (_, row) => {
       if (!row.roundsPlayed || row.roundsPlayed <= 0) {
@@ -152,7 +186,7 @@ const columns: TableProps<UserRow>["columns"] = [
     key: "status",
     align: "right",
     className: "users-status-col",
-    sorter: (a, b) => a.presenceLabel.localeCompare(b.presenceLabel),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (_, row) => {
       const actionLabel = row.canAddFriend
@@ -243,7 +277,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     key: "overallRankValue",
     align: "center",
     width: "10%",
-    sorter: (a, b) => (a.overallRankValue ?? Number.MAX_SAFE_INTEGER) - (b.overallRankValue ?? Number.MAX_SAFE_INTEGER),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value) => (value == null ? "-" : `#${formatMaxOneFractionDigit(value)}`),
   },
@@ -254,10 +288,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     align: "left",
     className: "users-username-col",
     width: "26%",
-    sorter: (a, b) =>
-      String(a.username ?? a.name ?? "").localeCompare(
-        String(b.username ?? b.name ?? ""),
-      ),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value, row) => {
       const username = String(value ?? row.name ?? "-").trim() || "-";
@@ -284,7 +315,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     key: "roundsPlayed",
     align: "center",
     width: "12%",
-    sorter: (a, b) => (a.roundsPlayed ?? -1) - (b.roundsPlayed ?? -1),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value) => formatMaxOneFractionDigit(value),
   },
@@ -294,7 +325,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     key: "averageScore",
     align: "center",
     width: "12%",
-    sorter: (a, b) => (a.averageScore ?? Number.MAX_SAFE_INTEGER) - (b.averageScore ?? Number.MAX_SAFE_INTEGER),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (value) => formatMaxOneFractionDigit(value),
   },
@@ -304,7 +335,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     key: "roundsWonRatePct",
     align: "center",
     width: "20%",
-    sorter: (a, b) => (a.roundsWonRatePct ?? -1) - (b.roundsWonRatePct ?? -1),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (_, row) => {
       if (!row.roundsPlayed || row.roundsPlayed <= 0) {
@@ -320,7 +351,7 @@ const leaderboardColumns: TableProps<UserRow>["columns"] = [
     key: "gamesWonRatePct",
     align: "center",
     width: "20%",
-    sorter: (a, b) => (a.gamesWonRatePct ?? -1) - (b.gamesWonRatePct ?? -1),
+    sorter: true,
     sortDirections: ["ascend", "descend"],
     render: (_, row) => {
       if (!row.gamesPlayed || row.gamesPlayed <= 0) {
@@ -338,20 +369,32 @@ const UsersPage: React.FC = () => {
   const apiService = useApi();
   const { value: token } = useLocalStorage<string>("token", "");
   const { value: userId } = useLocalStorage<string>("userId", "");
-  const [users, setUsers] = useState<User[] | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [directoryPage, setDirectoryPage] = useState<UserPageResponse | null>(null);
+  const [leaderboardPage, setLeaderboardPage] = useState<UserPageResponse | null>(null);
+  const [directoryPageIndex, setDirectoryPageIndex] = useState(0);
+  const [leaderboardPageIndex, setLeaderboardPageIndex] = useState(0);
+  const [directorySort, setDirectorySort] = useState<UserListSort>("username");
+  const [directoryDirection, setDirectoryDirection] = useState<UserListDirection>("asc");
+  const [leaderboardSort, setLeaderboardSort] = useState<UserListSort>("rank");
+  const [leaderboardDirection, setLeaderboardDirection] = useState<UserListDirection>("asc");
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 1000);
   const [leaderboardSearchTerm, setLeaderboardSearchTerm] = useState("");
   const debouncedLeaderboardSearchTerm = useDebouncedValue(leaderboardSearchTerm, 1000);
-  const [historyStatsByUserId, setHistoryStatsByUserId] = useState<Record<string, UserHistoryPlayedStats>>({});
   const [friendIds, setFriendIds] = useState<string[]>([]);
   const [pendingFriendRequestIds, setPendingFriendRequestIds] = useState<Record<string, true>>({});
   const [addingFriendById, setAddingFriendById] = useState<Record<string, boolean>>({});
   const [removingFriendById, setRemovingFriendById] = useState<Record<string, boolean>>({});
   const [showFriendsOnlyUsers, setShowFriendsOnlyUsers] = useState(false);
   const [showFriendsOnlyLeaderboard, setShowFriendsOnlyLeaderboard] = useState(false);
+  const previousFriendIdsKeyRef = useRef<string | null>(null);
   const liveConnected = useApiConnectionStatus(userId.trim(), token.trim());
+  const refreshing = directoryLoading || leaderboardLoading;
 
   useEffect(() => {
     const isSummaryFilterNavigation = String(searchParams.get("summary") ?? "").trim() === "1";
@@ -380,26 +423,118 @@ const UsersPage: React.FC = () => {
     });
   }, []);
 
-  const fetchUsers = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const fetchedUsers: User[] = await apiService.get<User[]>("/users");
-      setUsers(fetchedUsers);
-    } catch (error) {
-      setUsers([]);
-      if (error instanceof Error) {
-        alert(`Something went wrong while fetching users:\n${error.message}`);
-      } else {
-        console.error("An unknown error occurred while fetching users.");
-      }
-    } finally {
-      setRefreshing(false);
-    }
-  }, [apiService]);
+  const loadDirectoryPage = useCallback(() => getUsersPage(
+    apiService,
+    {
+      view: "directory",
+      page: directoryPageIndex,
+      size: USERS_PAGE_SIZE,
+      q: debouncedSearchTerm,
+      friendsOnly: showFriendsOnlyUsers,
+      sort: directorySort,
+      direction: directoryDirection,
+      excludeIds: userId.trim() ? [userId.trim()] : undefined,
+    },
+    token,
+  ), [
+    apiService,
+    debouncedSearchTerm,
+    directoryDirection,
+    directoryPageIndex,
+    directorySort,
+    showFriendsOnlyUsers,
+    token,
+    userId,
+  ]);
+
+  const loadLeaderboardPage = useCallback(() => getUsersPage(
+    apiService,
+    {
+      view: "leaderboard",
+      page: leaderboardPageIndex,
+      size: USERS_PAGE_SIZE,
+      q: debouncedLeaderboardSearchTerm,
+      friendsOnly: showFriendsOnlyLeaderboard,
+      sort: leaderboardSort,
+      direction: leaderboardDirection,
+    },
+    token,
+  ), [
+    apiService,
+    debouncedLeaderboardSearchTerm,
+    leaderboardDirection,
+    leaderboardPageIndex,
+    leaderboardSort,
+    showFriendsOnlyLeaderboard,
+    token,
+  ]);
 
   useEffect(() => {
-    void fetchUsers();
-  }, [fetchUsers]);
+    let active = true;
+    setDirectoryLoading(true);
+    void loadDirectoryPage()
+      .then((response) => {
+        if (active) {
+          const lastPageIndex = Math.max(0, response.totalPages - 1);
+          if (directoryPageIndex > lastPageIndex) {
+            setDirectoryPageIndex(lastPageIndex);
+            return;
+          }
+          setDirectoryPage(response);
+          setDirectoryError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) {
+          return;
+        }
+        setDirectoryPage((previous) => previous ?? emptyUserPage(directoryPageIndex));
+        setDirectoryError("Could not refresh the user directory. Showing the last available data.");
+        if (error instanceof Error) {
+          console.error("Could not load user directory:", error.message);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setDirectoryLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [directoryPageIndex, loadDirectoryPage, refreshVersion]);
+
+  useEffect(() => {
+    let active = true;
+    setLeaderboardLoading(true);
+    void loadLeaderboardPage()
+      .then((response) => {
+        if (active) {
+          const lastPageIndex = Math.max(0, response.totalPages - 1);
+          if (leaderboardPageIndex > lastPageIndex) {
+            setLeaderboardPageIndex(lastPageIndex);
+            return;
+          }
+          setLeaderboardPage(response);
+          setLeaderboardError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setLeaderboardPage((previous) => previous ?? emptyUserPage(leaderboardPageIndex));
+          setLeaderboardError("Could not refresh the leaderboard. Showing the last available data.");
+          console.error("Could not load leaderboard:", error);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLeaderboardLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [leaderboardPageIndex, loadLeaderboardPage, refreshVersion]);
 
   const loadFriendIds = useCallback(async () => {
     const authToken = token.trim();
@@ -488,12 +623,30 @@ const UsersPage: React.FC = () => {
     };
   }, [loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests, token]);
 
+  useEffect(() => {
+    const key = [...friendIds].sort().join("|");
+    const previousKey = previousFriendIdsKeyRef.current;
+    previousFriendIdsKeyRef.current = key;
+    if (previousKey == null || previousKey === key) {
+      return;
+    }
+    if (showFriendsOnlyUsers) {
+      setDirectoryPageIndex(0);
+    }
+    if (showFriendsOnlyLeaderboard) {
+      setLeaderboardPageIndex(0);
+    }
+    if (showFriendsOnlyUsers || showFriendsOnlyLeaderboard) {
+      setRefreshVersion((current) => current + 1);
+    }
+  }, [friendIds, showFriendsOnlyLeaderboard, showFriendsOnlyUsers]);
+
   const refreshUsersAndFriends = useCallback(async () => {
-    await fetchUsers();
+    setRefreshVersion((current) => current + 1);
     const acceptedIds = await loadFriendIds();
     await loadOutgoingPendingFriendRequestIds();
     reconcilePendingRequests(acceptedIds);
-  }, [fetchUsers, loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
+  }, [loadFriendIds, loadOutgoingPendingFriendRequestIds, reconcilePendingRequests]);
 
   const handleAddFriend = useCallback(async (targetUserId: string, targetUsername: string) => {
     const authToken = token.trim();
@@ -583,6 +736,7 @@ const UsersPage: React.FC = () => {
         return next;
       });
       await Promise.all([loadFriendIds(), loadOutgoingPendingFriendRequestIds()]);
+      setRefreshVersion((current) => current + 1);
     } catch (error) {
       if (error instanceof Error) {
         alert(`Could not remove friend:\n${error.message}`);
@@ -626,61 +780,16 @@ const UsersPage: React.FC = () => {
     router.push(`/spectator?sessionId=${encodeURIComponent(resolvedSessionId)}`);
   }, [router]);
 
-  useEffect(() => {
-    const authToken = token.trim();
-    const listedUsers = users ?? [];
-    if (!authToken || listedUsers.length === 0) {
-      setHistoryStatsByUserId({});
-      return;
-    }
-
-    const usersNeedingFallbackStats = listedUsers
-      .map((user) => {
-        const id = String(user.id ?? "").trim();
-        if (!id) {
-          return null;
-        }
-        const roundsPlayedRaw = user.roundsPlayed ?? user.rounds ?? user.roundCount;
-        const gamesPlayedRaw = user.gamesPlayed ?? user.games;
-        const hasRoundsPlayed = toFiniteMetric(roundsPlayedRaw) != null;
-        const hasGamesPlayed = toFiniteMetric(gamesPlayedRaw) != null;
-        return !hasRoundsPlayed || !hasGamesPlayed ? id : null;
-      })
-      .filter((value): value is string => value != null);
-
-    if (usersNeedingFallbackStats.length === 0) {
-      setHistoryStatsByUserId({});
-      return;
-    }
-
-    let active = true;
-    void Promise.all(
-      usersNeedingFallbackStats.map(async (id) => {
-        try {
-          const payload = await apiService.getWithAuth<unknown>(
-            `/users/${encodeURIComponent(id)}/history`,
-            authToken,
-          );
-          return [id, derivePlayedStatsFromHistoryPayload(payload, id)] as const;
-        } catch {
-          return [id, { gamesPlayed: null, roundsPlayed: null }] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (!active) {
-        return;
+  const users = useMemo(() => {
+    const byId = new Map<string, User>();
+    [...(directoryPage?.items ?? []), ...(leaderboardPage?.items ?? [])].forEach((user) => {
+      const id = String(user.id ?? "").trim();
+      if (id) {
+        byId.set(id, user);
       }
-      const next: Record<string, UserHistoryPlayedStats> = {};
-      entries.forEach(([id, stats]) => {
-        next[id] = stats;
-      });
-      setHistoryStatsByUserId(next);
     });
-
-    return () => {
-      active = false;
-    };
-  }, [apiService, token, users]);
+    return Array.from(byId.values());
+  }, [directoryPage?.items, leaderboardPage?.items]);
 
   const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
 
@@ -709,20 +818,19 @@ const UsersPage: React.FC = () => {
             normalizedId.length > 0 &&
             token.trim().length > 0 &&
             isFriend;
-          const historyStats = normalizedId ? historyStatsByUserId[normalizedId] : undefined;
           const rowWithLegacyMetrics = user as User & {
             gamesPlayed?: number | null;
             games?: number | null;
           };
           const roundsWon = Number(user.roundsWon ?? 0);
           const roundsPlayedRaw =
-            user.roundsPlayed ?? user.rounds ?? user.roundCount ?? historyStats?.roundsPlayed;
+            user.roundsPlayed ?? user.rounds ?? user.roundCount;
           const roundsPlayed = toFiniteMetric(roundsPlayedRaw);
           const roundsWonRatePct =
             roundsPlayed != null && roundsPlayed > 0 ? (roundsWon / roundsPlayed) * 100 : null;
           const gamesWonValue = Number(user.gamesWon ?? 0);
           const gamesPlayedRaw =
-            rowWithLegacyMetrics.gamesPlayed ?? rowWithLegacyMetrics.games ?? historyStats?.gamesPlayed;
+            rowWithLegacyMetrics.gamesPlayed ?? rowWithLegacyMetrics.games;
           const gamesPlayed = toFiniteMetric(gamesPlayedRaw);
           const gamesWonRatePct =
             gamesPlayed != null && gamesPlayed > 0 ? (gamesWonValue / gamesPlayed) * 100 : null;
@@ -780,7 +888,6 @@ const UsersPage: React.FC = () => {
       friendIdSet,
       handleAddFriend,
       handleRemoveFriend,
-      historyStatsByUserId,
       pendingFriendRequestIds,
       removingFriendById,
       token,
@@ -790,65 +897,43 @@ const UsersPage: React.FC = () => {
     ],
   );
 
-  const userRows = useMemo(
-    () => rows.filter((user) => String(user.id ?? "").trim() !== userId.trim()),
-    [rows, userId],
-  );
-
-  const normalizedSearch = debouncedSearchTerm.trim().toLowerCase();
-  const filteredUsers =
-    userRows?.filter((user) => {
-      const id = String(user.id ?? "").trim();
-      if (showFriendsOnlyUsers && !friendIdSet.has(id)) {
-        return false;
-      }
-      if (!normalizedSearch) {
-        return true;
-      }
-      const username = String(user.username ?? "").toLowerCase();
-      const name = String(user.name ?? "").toLowerCase();
-      const status = String(user.presenceLabel ?? "").toLowerCase();
-      return (
-        username.includes(normalizedSearch) ||
-        name.includes(normalizedSearch) ||
-        status.includes(normalizedSearch)
-      );
-    }) ?? [];
-
-  const leaderboardRows = useMemo(
-    () =>
-      rows
-        .filter((row) => row.overallRankValue != null)
-        .sort((a, b) => {
-          const rankDiff = (a.overallRankValue as number) - (b.overallRankValue as number);
-          if (rankDiff !== 0) {
-            return rankDiff;
-          }
-          const roundsDiff = (b.roundsPlayed ?? -1) - (a.roundsPlayed ?? -1);
-          if (roundsDiff !== 0) {
-            return roundsDiff;
-          }
-          return String(a.username ?? a.name ?? "").localeCompare(
-            String(b.username ?? b.name ?? ""),
-          );
-        }),
+  const rowsById = useMemo(
+    () => new Map(rows.map((row) => [String(row.id ?? "").trim(), row] as const)),
     [rows],
   );
+  const filteredUsers = useMemo(
+    () => (directoryPage?.items ?? [])
+      .map((user) => rowsById.get(String(user.id ?? "").trim()))
+      .filter((row): row is UserRow => row != null),
+    [directoryPage?.items, rowsById],
+  );
+  const filteredLeaderboardRows = useMemo(
+    () => (leaderboardPage?.items ?? [])
+      .map((user) => rowsById.get(String(user.id ?? "").trim()))
+      .filter((row): row is UserRow => row != null && row.overallRankValue != null),
+    [leaderboardPage?.items, rowsById],
+  );
 
-  const normalizedLeaderboardSearch = debouncedLeaderboardSearchTerm.trim().toLowerCase();
-  const filteredLeaderboardRows =
-    leaderboardRows?.filter((row) => {
-      const id = String(row.id ?? "").trim();
-      const isSelf = id.length > 0 && id === userId.trim();
-      if (showFriendsOnlyLeaderboard && !isSelf && !friendIdSet.has(id)) {
-        return false;
-      }
-      if (!normalizedLeaderboardSearch) {
-        return true;
-      }
-      const username = String(row.username ?? row.name ?? "").toLowerCase();
-      return username.includes(normalizedLeaderboardSearch);
-    }) ?? [];
+  const directoryColumns = useMemo<TableProps<UserRow>["columns"]>(
+    () => (columns ?? []).map((column) => ({
+      ...column,
+      sortOrder:
+        toServerSort(column.key) === directorySort
+          ? directoryDirection === "desc" ? "descend" : "ascend"
+          : null,
+    })),
+    [directoryDirection, directorySort],
+  );
+  const controlledLeaderboardColumns = useMemo<TableProps<UserRow>["columns"]>(
+    () => (leaderboardColumns ?? []).map((column) => ({
+      ...column,
+      sortOrder:
+        toServerSort(column.key) === leaderboardSort
+          ? leaderboardDirection === "desc" ? "descend" : "ascend"
+          : null,
+    })),
+    [leaderboardDirection, leaderboardSort],
+  );
 
   const handleBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
@@ -878,23 +963,33 @@ const UsersPage: React.FC = () => {
                 </span>
               </div>
             }
-            loading={!users}
+            loading={directoryPage == null && directoryLoading}
             className="dashboard-container"
           >
-            {users ? (
+            {directoryPage ? (
               <>
+                {directoryError ? (
+                  <Alert showIcon type="error" message={directoryError} />
+                ) : null}
                 <div className="users-overview-toolbar users-overview-toolbar-with-filters">
                   <Input
                     value={searchTerm}
                     allowClear
                     className="users-overview-search"
                     placeholder="Search by Username or Status"
-                    onChange={(event) => setSearchTerm(event.target.value)}
+                    maxLength={64}
+                    onChange={(event) => {
+                      setSearchTerm(event.target.value);
+                      setDirectoryPageIndex(0);
+                    }}
                   />
                   <Checkbox
                     className="users-overview-filter-toggle"
                     checked={showFriendsOnlyUsers}
-                    onChange={(event) => setShowFriendsOnlyUsers(event.target.checked)}
+                    onChange={(event) => {
+                      setShowFriendsOnlyUsers(event.target.checked);
+                      setDirectoryPageIndex(0);
+                    }}
                   >
                     Show Friends Only
                   </Checkbox>
@@ -909,17 +1004,40 @@ const UsersPage: React.FC = () => {
                 </div>
                 <Table<UserRow>
                   className="users-overview-table responsive-list-table"
-                  columns={columns}
+                  columns={directoryColumns}
                   dataSource={filteredUsers}
                   rowKey="key"
                   size="small"
                   tableLayout="fixed"
+                  loading={directoryLoading}
                   pagination={{
+                    current: (directoryPage.page ?? 0) + 1,
                     pageSize: USERS_PAGE_SIZE,
+                    total: directoryPage.totalElements,
                     showSizeChanger: false,
                     hideOnSinglePage: false,
                     responsive: true,
                     position: ["bottomCenter"],
+                    onChange: (page) => setDirectoryPageIndex(Math.max(0, page - 1)),
+                  }}
+                  onChange={(_pagination, _filters, sorter) => {
+                    const selected = Array.isArray(sorter) ? sorter[0] : sorter;
+                    const nextSort = toServerSort(selected?.columnKey ?? selected?.field);
+                    if (!selected?.order) {
+                      setDirectorySort("username");
+                      setDirectoryDirection("asc");
+                      setDirectoryPageIndex(0);
+                      return;
+                    }
+                    if (!nextSort) {
+                      return;
+                    }
+                    const nextDirection: UserListDirection = selected.order === "descend" ? "desc" : "asc";
+                    if (nextSort !== directorySort || nextDirection !== directoryDirection) {
+                      setDirectorySort(nextSort);
+                      setDirectoryDirection(nextDirection);
+                      setDirectoryPageIndex(0);
+                    }
                   }}
                   rowClassName={() => "users-overview-row"}
                   onRow={(row: UserRow) => ({
@@ -938,35 +1056,68 @@ const UsersPage: React.FC = () => {
               </div>
             }
           >
+            {leaderboardError ? (
+              <Alert showIcon type="error" message={leaderboardError} />
+            ) : null}
             <div className="users-overview-toolbar">
               <Input
                 value={leaderboardSearchTerm}
                 allowClear
                 className="users-overview-search"
                 placeholder="Search by Username"
-                onChange={(event) => setLeaderboardSearchTerm(event.target.value)}
+                maxLength={64}
+                onChange={(event) => {
+                  setLeaderboardSearchTerm(event.target.value);
+                  setLeaderboardPageIndex(0);
+                }}
               />
               <Checkbox
                 className="users-overview-filter-toggle"
                 checked={showFriendsOnlyLeaderboard}
-                onChange={(event) => setShowFriendsOnlyLeaderboard(event.target.checked)}
+                onChange={(event) => {
+                  setShowFriendsOnlyLeaderboard(event.target.checked);
+                  setLeaderboardPageIndex(0);
+                }}
               >
                 Show Friends Only
               </Checkbox>
             </div>
             <Table<UserRow>
               className="users-overview-table responsive-list-table"
-              columns={leaderboardColumns}
+              columns={controlledLeaderboardColumns}
               dataSource={filteredLeaderboardRows}
               rowKey="key"
               size="small"
               tableLayout="fixed"
+              loading={leaderboardLoading}
               pagination={{
+                current: (leaderboardPage?.page ?? 0) + 1,
                 pageSize: USERS_PAGE_SIZE,
+                total: leaderboardPage?.totalElements ?? 0,
                 showSizeChanger: false,
                 hideOnSinglePage: false,
                 responsive: true,
                 position: ["bottomCenter"],
+                onChange: (page) => setLeaderboardPageIndex(Math.max(0, page - 1)),
+              }}
+              onChange={(_pagination, _filters, sorter) => {
+                const selected = Array.isArray(sorter) ? sorter[0] : sorter;
+                const nextSort = toServerSort(selected?.columnKey ?? selected?.field);
+                if (!selected?.order) {
+                  setLeaderboardSort("rank");
+                  setLeaderboardDirection("asc");
+                  setLeaderboardPageIndex(0);
+                  return;
+                }
+                if (!nextSort) {
+                  return;
+                }
+                const nextDirection: UserListDirection = selected.order === "descend" ? "desc" : "asc";
+                if (nextSort !== leaderboardSort || nextDirection !== leaderboardDirection) {
+                  setLeaderboardSort(nextSort);
+                  setLeaderboardDirection(nextDirection);
+                  setLeaderboardPageIndex(0);
+                }
               }}
               rowClassName={() => "users-overview-row"}
               onRow={(row: UserRow) => ({

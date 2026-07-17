@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import CharacterAvatar from "@/components/CharacterAvatar";
 import CaboChatPanel from "@/components/CaboChatPanel";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
-import GameTutorial from "@/components/GameTutorial";
 import { useApi } from "@/hooks/useApi";
 import { useAttentionTitleBlink } from "@/hooks/useAttentionTitleBlink";
 import {
@@ -23,8 +22,9 @@ import SockJS from "sockjs-client";
 import type { User } from "@/types/user";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import Scores from "./components/Scores";
-import FinalScoreScreen from "./components/FinalScoreScreen";
+import dynamic from "next/dynamic";
+import { GameTurnProgress, GameTurnSeconds } from "./components/GameTurnCountdown";
+import CaboZeroComboCelebration from "./components/CaboZeroComboCelebration";
 import {
     USER_DEFAULT_PRIORITY_COLORS,
     getCharacterCelebrationFrameMax,
@@ -36,6 +36,10 @@ import {
     parseStoredPreferredColorPriority,
 } from "@/utils/userSettings";
 import { resolveConfirmationTimeoutSeconds, showTimedConfirmation } from "@/utils/timedConfirmation";
+
+const GameTutorial = dynamic(() => import("@/components/GameTutorial"));
+const Scores = dynamic(() => import("./components/Scores"));
+const FinalScoreScreen = dynamic(() => import("./components/FinalScoreScreen"));
 
 interface Card {
     value: number;
@@ -85,6 +89,7 @@ type GameStateSignal = {
     currentTurnPlayerId?: number | string | null;
     caboCalled?: boolean | null;
     caboForcedByTimeout?: boolean | null;
+    sessionEnded?: boolean | null;
     turnSeconds?: number | string | null;
     initialPeekSeconds?: number | string | null;
     abilityRevealSeconds?: number | string | null;
@@ -130,6 +135,7 @@ type SyncStateResponse = {
     currentTurnUserId?: number | string | null;
     caboCalled?: boolean | null;
     caboForcedByTimeout?: boolean | null;
+    sessionEnded?: boolean | null;
     timedOutPlayerIds?: Array<number | string | null> | null;
     afkTimeoutSeconds?: number | string | null;
     myHand?: unknown;
@@ -1318,6 +1324,7 @@ const Game = () => {
       const [isAbilityRevealWindow, setIsAbilityRevealWindow] = useState<boolean>(false);
       const [isCaboCalledGlobal, setIsCaboCalledGlobal] = useState<boolean>(false);
       const [isCaboForcedByTimeoutGlobal, setIsCaboForcedByTimeoutGlobal] = useState<boolean>(false);
+      const [sessionEnded, setSessionEnded] = useState<boolean>(false);
       const [afkTimeoutSeconds, setAfkTimeoutSeconds] = useState<number>(300);
       const [afkRemainingSeconds, setAfkRemainingSeconds] = useState<number>(300);
       const [socketSynced, setSocketSynced] = useState<boolean>(true);
@@ -1391,7 +1398,7 @@ const Game = () => {
       const playerNamesByIdRef = useRef<Record<number, string>>({});
       const [timedOutPlayerIds, setTimedOutPlayerIds] = useState<number[]>([]);
       const [currentTurnUserId, setCurrentTurnUserId] = useState<number | null>(null);
-      const [turnTimeLeftMs, setTurnTimeLeftMs] = useState<number>(DEFAULT_TURN_SECONDS * 1000);
+      const [turnDeadlineMs, setTurnDeadlineMs] = useState<number | null>(null);
       const [isCallingCabo, setIsCallingCabo] = useState<boolean>(false);
       const [isLeavingSpectating, setIsLeavingSpectating] = useState<boolean>(false);
       const [isSubmittingRematchDecision, setIsSubmittingRematchDecision] = useState<boolean>(false);
@@ -1403,7 +1410,6 @@ const Game = () => {
           useState<"CONTINUE" | "FRESH" | "NONE" | null>(null);
       const caboRevealPhaseStartedAtMsRef = useRef<number | null>(null);
       const introPhaseStartedAtMsRef = useRef<number | null>(null);
-      const turnDeadlineMsRef = useRef<number | null>(null);
       const caboRevealDeadlineMsRef = useRef<number | null>(null);
       const rematchDeadlineMsRef = useRef<number | null>(null);
       const postRoundSessionIdFromSyncRef = useRef<string>("");
@@ -2060,6 +2066,9 @@ const Game = () => {
                           }
                           if (typeof payload?.caboForcedByTimeout === "boolean") {
                               setIsCaboForcedByTimeoutGlobal(payload.caboForcedByTimeout);
+                          }
+                          if (typeof payload?.sessionEnded === 'boolean') {
+                              setSessionEnded(payload.sessionEnded);
                           }
                           setTimedOutPlayerIds(
                               Array.isArray(payload?.timedOutPlayerIds)
@@ -3104,39 +3113,17 @@ const Game = () => {
       }, [shouldPlayAfkWarningLoop]);
       const toDisplayedSeconds = (seconds: number): number =>
           seconds > 0 ? Math.max(0, seconds - 1) : 0;
-      // Single source of truth for countdown: derive both label and bar from ms.
-      const displayedTurnTimeLeft = Math.max(0, Math.ceil(turnTimeLeftMs / 1000));
       const activeTurnWindowMs = Math.max(1, activeTurnWindowSeconds * 1000);
-      const clampedTurnTimeLeftMs = Math.max(0, Math.min(turnTimeLeftMs, activeTurnWindowMs));
-      const turnProgressPercent = displayedTurnTimeLeft <= 0
-          ? 0
-          : Math.max(0, Math.min(100, (clampedTurnTimeLeftMs / activeTurnWindowMs) * 100));
       const displayedCaboRevealCountdown = toDisplayedSeconds(caboRevealCountdown);
       const displayedRematchCountdown = toDisplayedSeconds(rematchCountdown);
       const displayedAfkRemainingSeconds = toDisplayedSeconds(afkRemainingSeconds);
       useEffect(() => {
           if (!showTurnCountdown) {
-              setTurnTimeLeftMs(activeTurnWindowSeconds * 1000);
-              turnDeadlineMsRef.current = null;
+              setTurnDeadlineMs(null);
               return;
           }
 
-          turnDeadlineMsRef.current = Date.now() + (activeTurnWindowSeconds * 1000);
-          const tick = () => {
-              const deadline = turnDeadlineMsRef.current;
-              if (deadline == null) {
-                  setTurnTimeLeftMs(activeTurnWindowSeconds * 1000);
-                  return;
-              }
-              const remainingMs = Math.max(0, deadline - Date.now());
-              setTurnTimeLeftMs(remainingMs);
-          };
-          tick();
-          const intervalId = window.setInterval(tick, 50);
-
-          return () => {
-              window.clearInterval(intervalId);
-          };
+          setTurnDeadlineMs(Date.now() + (activeTurnWindowSeconds * 1000));
       }, [showTurnCountdown, currentTurnUserId, gameStatus, activeTurnWindowSeconds]);
 
       useEffect(() => {
@@ -3481,6 +3468,9 @@ const refreshSyncState = useCallback(async (activeGameId: string, authToken: str
     if (typeof response?.caboForcedByTimeout === "boolean") {
         setIsCaboForcedByTimeoutGlobal(response.caboForcedByTimeout);
     }
+    if (typeof response?.sessionEnded === 'boolean') {
+        setSessionEnded(response.sessionEnded);
+    }
     if (Array.isArray(response?.timedOutPlayerIds)) {
         setTimedOutPlayerIds(
             response.timedOutPlayerIds
@@ -3673,11 +3663,18 @@ useEffect(() => {
         return refreshSyncState(gameId, authToken);
     };
 
-    const syncTurnOwnership = async () => {
+    const syncTurnOwnership = async (force: boolean = false) => {
         if (typeof document !== "undefined" && document.visibilityState !== "visible") {
             return;
         }
         const nowMs = Date.now();
+        if (
+            !force &&
+            socketSynced &&
+            nowMs - lastGameStateSignalMsRef.current < 30000
+        ) {
+            return;
+        }
         if (nowMs < turnOwnerProbeBackoffUntilMsRef.current) {
             return;
         }
@@ -3762,7 +3759,7 @@ useEffect(() => {
     };
 
     const runFocusRecoveryBurst = () => {
-        void syncTurnOwnership();
+        void syncTurnOwnership(true);
         if (socketSynced) {
             return;
         }
@@ -3776,7 +3773,7 @@ useEffect(() => {
     };
 
     const handleFocus = () => {
-        void syncTurnOwnership();
+        void syncTurnOwnership(true);
     };
     const handleVisibilityChange = () => {
         if (document.visibilityState === "visible") {
@@ -3830,11 +3827,18 @@ useEffect(() => {
     discardResyncFailureCountRef.current = 0;
     discardResyncBackoffUntilMsRef.current = 0;
 
-    const resyncDiscardPileTop = async () => {
+    const resyncDiscardPileTop = async (force: boolean = false) => {
         if (typeof document !== "undefined" && document.visibilityState !== "visible") {
             return;
         }
         const now = Date.now();
+        if (
+            !force &&
+            socketSynced &&
+            now - lastGameStateSignalMsRef.current < 30000
+        ) {
+            return;
+        }
         if (now < discardResyncBackoffUntilMsRef.current) {
             return;
         }
@@ -3874,11 +3878,11 @@ useEffect(() => {
 
     const handleVisibilityChange = () => {
         if (document.visibilityState === "visible") {
-            void resyncDiscardPileTop();
+            void resyncDiscardPileTop(true);
         }
     };
     const handlePageShow = () => {
-        void resyncDiscardPileTop();
+        void resyncDiscardPileTop(true);
     };
 
     void resyncDiscardPileTop();
@@ -4397,7 +4401,7 @@ const callCabo = async () => {
     }
     const callCaboConfirmTimeoutSeconds = resolveConfirmationTimeoutSeconds(
         10,
-        Math.ceil(Math.max(0, turnTimeLeftMs) / 1000),
+        Math.ceil(Math.max(0, (turnDeadlineMs ?? Date.now()) - Date.now()) / 1000),
     );
     const confirmed = await showTimedConfirmation({
         title: "Are you sure you want to call Cabo? This ends your turn immediately and starts the last round.",
@@ -4477,6 +4481,14 @@ const handleLeaveSpectating = async () => {
 
 // #36/#42: Scores
 const [isScoresOpen, setIsScoresOpen] = useState<boolean>(false);
+const [hasMountedScores, setHasMountedScores] = useState(false);
+const [hasMountedTutorial, setHasMountedTutorial] = useState(false);
+useEffect(() => {
+    if (isScoresOpen) setHasMountedScores(true);
+}, [isScoresOpen]);
+useEffect(() => {
+    if (isHowToPlayOpen) setHasMountedTutorial(true);
+}, [isHowToPlayOpen]);
 const scoreParticipantIdSet = useMemo(() => {
     if (gamePlayerIds.length > 0) {
         return new Set(gamePlayerIds);
@@ -4748,6 +4760,7 @@ const caboRevealPlayers = useMemo(() => {
         };
     });
 }, [HAND_SIZE, canonicalCaboRevealOrderIds, participantFinalScores, playerCardsById, playerNamesById]);
+const caboRevealHasZeroCombo = caboRevealPlayers.some((player) => player.isCaboZeroSpecial === true);
 
 const caboRevealWinner = useMemo(() => {
     if (caboRevealPlayers.length === 0) {
@@ -5213,7 +5226,14 @@ const handleShowScores = () => {
 };
 
 const submitRematchChoice = (decision: "CONTINUE" | "FRESH" | "NONE") => {
-    if (!isAwaitingRematchDecision || !gameId || !token || isSubmittingRematchDecision || myRematchDecision !== null) {
+    if (
+        (decision === 'CONTINUE' && sessionEnded)
+        || !isAwaitingRematchDecision
+        || !gameId
+        || !token
+        || isSubmittingRematchDecision
+        || myRematchDecision !== null
+    ) {
         return;
     }
 
@@ -5262,54 +5282,52 @@ const centerTurnActionLabel = useMemo(() => {
         return "";
     }
 
-    const suffix = `(${displayedTurnTimeLeft}s)`;
     if (isDrawingFromPile || isDrawingFromDiscardPile) {
-        return `Preparing action ${suffix}`;
+        return "Preparing action";
     }
 
     if (isAbilityPending) {
         if (isAbilityChoicePending) {
             if (gameStatus === "ability_peek_self") {
-                return `Peek ability: PEEK or End Turn ${suffix}`;
+                return "Peek ability: PEEK or End Turn";
             }
             if (gameStatus === "ability_peek_opponent") {
-                return `Spy ability: SPY or End Turn ${suffix}`;
+                return "Spy ability: SPY or End Turn";
             }
             if (gameStatus === "ability_swap") {
-                return `Swap ability: SWAP or End Turn ${suffix}`;
+                return "Swap ability: SWAP or End Turn";
             }
-            return `Ability: USE or End Turn ${suffix}`;
+            return "Ability: USE or End Turn";
         }
         if (gameStatus === "ability_peek_self") {
-            return `Peek ability: Choose 1 of your own cards! ${suffix}`;
+            return "Peek ability: Choose 1 of your own cards!";
         }
         if (gameStatus === "ability_peek_opponent") {
-            return `Spy ability: Choose 1 opponent card! ${suffix}`;
+            return "Spy ability: Choose 1 opponent card!";
         }
         if (gameStatus === "ability_swap") {
             if (abilitySelectedOwnCardIndex == null) {
-                return `Swap ability: Choose 1 of your own cards! ${suffix}`;
+                return "Swap ability: Choose 1 of your own cards!";
             }
-            return `Swap ability: Choose 1 opponent card! ${suffix}`;
+            return "Swap ability: Choose 1 opponent card!";
         }
     }
 
     if (canSwapDrawnCardWithHand && selectedDrawSource === "draw_pile") {
-        return `Swap with hand or discard ${suffix}`;
+        return "Swap with hand or discard";
     }
 
     if (canSwapDrawnCardWithHand && selectedDrawSource === "discard_pile") {
-        return `Swap with your hand ${suffix}`;
+        return "Swap with your hand";
     }
 
     if (canSwapDrawnCardWithHand && selectedDrawSource === "unknown") {
-        return `Resume turn: swap with hand or discard ${suffix}`;
+        return "Resume turn: swap with hand or discard";
     }
 
-    return `Draw from Draw Pile or Discard Pile ${suffix}`;
+    return "Draw from Draw Pile or Discard Pile";
 }, [
     showCenterTurnCountdown,
-    displayedTurnTimeLeft,
     isDrawingFromPile,
     isDrawingFromDiscardPile,
     isAbilityPending,
@@ -5379,6 +5397,11 @@ if (isCaboRevealPhase) {
         !(caboRevealIsPlayerStage && caboRevealActivePlayer?.isCaboZeroSpecial === true);
     const shouldShowCaboRevealCountdown =
         !(caboRevealIsPlayerStage && caboRevealActivePlayer?.isCaboZeroSpecial === true);
+    const shouldShowCaboZeroCelebration =
+        caboRevealIsPlayerStage &&
+        caboRevealActivePlayer?.isCaboZeroSpecial === true &&
+        caboRevealActivePlayerElapsedMs >= caboRevealTotalShowStartMs &&
+        caboRevealActivePlayerElapsedMs < caboRevealTotalShowEndMs;
     const specialRevealLabel = "Special win!";
 
     return (
@@ -5387,6 +5410,13 @@ if (isCaboRevealPhase) {
                 <InlineMusicPlayer controlsDisabled />
             </div>
             <div className="game-cabo-reveal-screen" role="status" aria-live="polite">
+                {caboRevealHasZeroCombo && (
+                    <CaboZeroComboCelebration
+                        active={shouldShowCaboZeroCelebration}
+                        opacity={caboRevealTotalOpacity}
+                    />
+                )}
+
                 {caboRevealIsOpeningStage && (
                     <div className="game-cabo-reveal-opening">
                         <h2 className="game-cabo-reveal-opening-title">Game Concluded</h2>
@@ -5477,6 +5507,14 @@ if (isCaboRevealPhase) {
                         )}
 
                         <div className="game-cabo-reveal-special-cell">
+                            {shouldShowCaboZeroCelebration && (
+                                <p
+                                    className="game-cabo-reveal-special-text game-cabo-reveal-zero-combo-text"
+                                    style={{ opacity: caboRevealTotalOpacity }}
+                                >
+                                    Special win! 12 + 12 + 13 + 13 = 0 points.
+                                </p>
+                            )}
                             {shouldShowSpecialFireworks && (
                                 <>
                                     <div className="game-cabo-reveal-fireworks" aria-hidden="true" />
@@ -5601,7 +5639,9 @@ const playerListRows = tablePlayerIds.map((id) => {
                                           >
                                               <span style={player.nameStyle}>{player.label}</span>
                                               {player.isActive && showTurnCountdown && (
-                                                  <span className="game-player-list-timer">{displayedTurnTimeLeft}s</span>
+                                                  <span className="game-player-list-timer">
+                                                      <GameTurnSeconds deadlineMs={turnDeadlineMs} />s
+                                                  </span>
                                               )}
                                           </div>
                                       ))}
@@ -5851,14 +5891,10 @@ const playerListRows = tablePlayerIds.map((id) => {
                                           {showCenterTurnCountdown && (
                                               <div className="game-center-piles-grid">
                                                   <div className="game-center-middle-lane-span">
-                                                      <div className="game-turn-progress-track">
-                                                          <div
-                                                              className="game-turn-progress-fill"
-                                                              style={{
-                                                                  width: `${turnProgressPercent}%`,
-                                                              }}
-                                                          />
-                                                      </div>
+                                                      <GameTurnProgress
+                                                          deadlineMs={turnDeadlineMs}
+                                                          durationMs={activeTurnWindowMs}
+                                                      />
                                                   </div>
                                               </div>
                                           )}
@@ -5866,7 +5902,9 @@ const playerListRows = tablePlayerIds.map((id) => {
 
                                       <div className="game-center-row game-center-row-timer-text">
                                           {showCenterTurnCountdown && (
-                                              <p className="game-turn-progress-label">{centerTurnActionLabel}</p>
+                                              <p className="game-turn-progress-label">
+                                                  {centerTurnActionLabel} (<GameTurnSeconds deadlineMs={turnDeadlineMs} />s)
+                                              </p>
                                           )}
                                       </div>
 
@@ -6188,31 +6226,41 @@ const playerListRows = tablePlayerIds.map((id) => {
                       />
                   )}
                   {/* #36/#42: Scores*/}
-                  <Scores
-                    isOpen={isScoresOpen}
-                    onClose={() => setIsScoresOpen(false)}
-                    players={scoreModalPlayers}
-                    selfUserId={selfUserId}
-                    totalRounds={finalScoreTotalRounds}
-                  />
-                  <GameTutorial isOpen={isHowToPlayOpen} onClose={() => setIsHowToPlayOpen(false)} />
+                  {hasMountedScores && (
+                      <Scores
+                        isOpen={isScoresOpen}
+                        onClose={() => setIsScoresOpen(false)}
+                        players={scoreModalPlayers}
+                        selfUserId={selfUserId}
+                        totalRounds={finalScoreTotalRounds}
+                      />
+                  )}
+                  {hasMountedTutorial && (
+                      <GameTutorial
+                          isOpen={isHowToPlayOpen}
+                          onClose={() => setIsHowToPlayOpen(false)}
+                      />
+                  )}
                   {/* #34: Final Score Screen */}
-                  <FinalScoreScreen
-                      isOpen={isRematchScreenPhase}
-                      players={participantFinalScores}
-                      selfUserId={selfUserId}
-                      chatSessionId={lobbySessionId}
-                      chatToken={token}
-                      chatUserId={userId}
-                      chatUserPrimaryColorById={chatPrimaryColorByUserId}
-                      chatCooldownSeconds={chatCooldownSeconds}
-                      totalRounds={finalScoreTotalRounds}
-                      rematchCountdownSeconds={displayedRematchCountdown}
-                      myRematchDecision={myRematchDecision}
-                      isSubmittingRematchDecision={isSubmittingRematchDecision}
-                      onChooseRematch={submitRematchChoice}
-                      hideRematchSection={isSpectatorMode}
-                  />
+                  {isRematchScreenPhase && (
+                      <FinalScoreScreen
+                          isOpen={isRematchScreenPhase}
+                          players={participantFinalScores}
+                          selfUserId={selfUserId}
+                          chatSessionId={lobbySessionId}
+                          chatToken={token}
+                          chatUserId={userId}
+                          chatUserPrimaryColorById={chatPrimaryColorByUserId}
+                          chatCooldownSeconds={chatCooldownSeconds}
+                          totalRounds={finalScoreTotalRounds}
+                          rematchCountdownSeconds={displayedRematchCountdown}
+                          sessionEnded={sessionEnded}
+                          myRematchDecision={myRematchDecision}
+                          isSubmittingRematchDecision={isSubmittingRematchDecision}
+                          onChooseRematch={submitRematchChoice}
+                          hideRematchSection={isSpectatorMode}
+                      />
+                  )}
                   {isRematchScreenPhase && (
                       <div className="inline-music-controller-hidden" aria-hidden="true">
                           <InlineMusicPlayer controlsDisabled />

@@ -15,39 +15,56 @@ export default function DisconnectHandler() {
 
         const isActiveTab = () => document.visibilityState === "visible" && document.hasFocus();
         let lastHeartbeatMs = 0;
+        let heartbeatInFlight = false;
+        let heartbeatController: AbortController | null = null;
+        let heartbeatTimeoutId: number | null = null;
 
-        const sendHeartbeat = async (force: boolean = false) => {
+        const sendHeartbeat = (force: boolean = false) => {
             if (!force && !isActiveTab()) {
                 return;
             }
 
             const now = Date.now();
-            if (!force && now - lastHeartbeatMs < HEARTBEAT_MIN_INTERVAL_MS) {
+            if (heartbeatInFlight || (!force && now - lastHeartbeatMs < HEARTBEAT_MIN_INTERVAL_MS)) {
                 return;
             }
 
-            try {
-                await fetch(`${getApiDomain()}/heartbeat`, {
+            heartbeatInFlight = true;
+            lastHeartbeatMs = now;
+            const controller = new AbortController();
+            heartbeatController = controller;
+            heartbeatTimeoutId = window.setTimeout(() => controller.abort(), 10000);
+            void fetch(`${getApiDomain()}/heartbeat`, {
                     method: "POST",
                     headers: { Authorization: t },
+                    signal: controller.signal,
+                })
+                .catch(() => {
+                    // ignore errors; server might be temporarily unreachable
+                })
+                .finally(() => {
+                    if (heartbeatTimeoutId != null) {
+                        window.clearTimeout(heartbeatTimeoutId);
+                        heartbeatTimeoutId = null;
+                    }
+                    if (heartbeatController === controller) {
+                        heartbeatController = null;
+                    }
+                    heartbeatInFlight = false;
                 });
-                lastHeartbeatMs = now;
-            } catch {
-                // ignore errors; server might be temporarily unreachable
-            }
         };
 
         const onActivity = () => {
-            void sendHeartbeat();
+            sendHeartbeat();
         };
         const onTabActive = () => {
             if (isActiveTab()) {
-                void sendHeartbeat(true);
+                sendHeartbeat(true);
             }
         };
 
         if (isActiveTab()) {
-            void sendHeartbeat(true);
+            sendHeartbeat(true);
         }
 
         window.addEventListener("pointerdown", onActivity, { passive: true });
@@ -59,6 +76,10 @@ export default function DisconnectHandler() {
         document.addEventListener("visibilitychange", onTabActive);
 
         return () => {
+            heartbeatController?.abort();
+            if (heartbeatTimeoutId != null) {
+                window.clearTimeout(heartbeatTimeoutId);
+            }
             window.removeEventListener("pointerdown", onActivity);
             window.removeEventListener("pointermove", onActivity);
             window.removeEventListener("keydown", onActivity);

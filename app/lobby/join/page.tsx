@@ -5,6 +5,7 @@ import { Button, Card, Input, Table } from "antd";
 import type { TableProps } from "antd";
 import { useRouter } from "next/navigation";
 import { useApi } from "@/hooks/useApi";
+import { getUsersByIds } from "@/api/userDirectory";
 import { useApiConnectionStatus } from "@/hooks/useApiConnectionStatus";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import InlineMusicPlayer from "@/components/InlineMusicPlayer";
@@ -198,8 +199,8 @@ const LobbyJoin = () => {
             let nextHostUsernamesById = hostUsernamesById;
             if (hostIds.length > 0 && hasMissingHostUsername(hostIds, hostUsernamesById)) {
                 try {
-                    const users = await api.get<User[]>("/users");
-                    const fetchedMap = toUsernameMap(users);
+                    const hostUsers = await getUsersByIds(api, hostIds, authToken);
+                    const fetchedMap = toUsernameMap(hostUsers);
                     nextHostUsernamesById = { ...hostUsernamesById, ...fetchedMap };
                     setHostUsernamesById(nextHostUsernamesById);
                 } catch {

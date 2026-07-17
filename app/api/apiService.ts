@@ -1,6 +1,16 @@
 import { getApiDomain } from "@/utils/domain";
 import { ApplicationError } from "@/types/error";
 
+export type ApiRequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+const DEFAULT_GET_TIMEOUT_MS = 12_000;
+const DEFAULT_MUTATION_TIMEOUT_MS = 20_000;
+const MAX_CACHED_GET_RESPONSES = 64;
+const MAX_COOLDOWN_ENTRIES = 160;
+
 export class ApiService {
   private baseURL: string;
   private defaultHeaders: HeadersInit;
@@ -8,6 +18,7 @@ export class ApiService {
   private eTagByGetRequestKey: Map<string, string>;
   private cachedGetPayloadByRequestKey: Map<string, unknown>;
   private cooldownUntilEpochMsByRequestKey: Map<string, number>;
+  private getCacheGeneration: number;
 
   constructor() {
     this.baseURL = getApiDomain(); // Klasse die backend URL holt, damit Frontend weiss wohin es die Requests schicken soll
@@ -16,11 +27,78 @@ export class ApiService {
     this.eTagByGetRequestKey = new Map<string, string>();
     this.cachedGetPayloadByRequestKey = new Map<string, unknown>();
     this.cooldownUntilEpochMsByRequestKey = new Map<string, number>();
+    this.getCacheGeneration = 0;
   }
 
   private buildGetRequestKey(endpoint: string, token?: string): string {
     const normalizedToken = String(token ?? "").trim();
     return `GET:${this.baseURL}${endpoint}:${normalizedToken}`;
+  }
+
+  private async fetchWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit,
+    options: ApiRequestOptions = {},
+    defaultTimeoutMs: number = DEFAULT_MUTATION_TIMEOUT_MS,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutMs = Math.max(1_000, options.timeoutMs ?? defaultTimeoutMs);
+    const timeoutId = globalThis.setTimeout(() => {
+      controller.abort(new DOMException("The request timed out.", "TimeoutError"));
+    }, timeoutMs);
+    const externalSignal = options.signal;
+    const abortFromExternalSignal = () => controller.abort(externalSignal?.reason);
+
+    if (externalSignal?.aborted) {
+      abortFromExternalSignal();
+    } else {
+      externalSignal?.addEventListener("abort", abortFromExternalSignal, { once: true });
+    }
+
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+      globalThis.clearTimeout(timeoutId);
+      externalSignal?.removeEventListener("abort", abortFromExternalSignal);
+    }
+  }
+
+  private clearCachedGetResponses(): void {
+    this.getCacheGeneration += 1;
+    this.eTagByGetRequestKey.clear();
+    this.cachedGetPayloadByRequestKey.clear();
+    // Existing fetches cannot be cancelled safely because callers may share
+    // them, but new reads must not deduplicate against a pre-mutation request.
+    this.inFlightGetRequests.clear();
+  }
+
+  private cacheGetResponse(requestKey: string, eTag: string, payload: unknown): void {
+    this.eTagByGetRequestKey.delete(requestKey);
+    this.cachedGetPayloadByRequestKey.delete(requestKey);
+    this.eTagByGetRequestKey.set(requestKey, eTag);
+    this.cachedGetPayloadByRequestKey.set(requestKey, payload);
+
+    while (this.cachedGetPayloadByRequestKey.size > MAX_CACHED_GET_RESPONSES) {
+      const oldestKey = this.cachedGetPayloadByRequestKey.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      this.cachedGetPayloadByRequestKey.delete(oldestKey);
+      this.eTagByGetRequestKey.delete(oldestKey);
+      this.cooldownUntilEpochMsByRequestKey.delete(oldestKey);
+    }
+  }
+
+  private touchCachedGetResponse(requestKey: string): void {
+    const payload = this.cachedGetPayloadByRequestKey.get(requestKey);
+    const eTag = this.eTagByGetRequestKey.get(requestKey);
+    if (payload === undefined || !eTag) {
+      return;
+    }
+    this.cachedGetPayloadByRequestKey.delete(requestKey);
+    this.eTagByGetRequestKey.delete(requestKey);
+    this.cachedGetPayloadByRequestKey.set(requestKey, payload);
+    this.eTagByGetRequestKey.set(requestKey, eTag);
   }
 
   private async runDedupedGetRequest<T>(
@@ -95,6 +173,13 @@ export class ApiService {
     const retryAfterMs = this.parseRetryAfterMs(res.headers.get("Retry-After")) ?? 1000;
     const cooldownUntilMs = Date.now() + Math.max(250, retryAfterMs);
     this.cooldownUntilEpochMsByRequestKey.set(requestKey, cooldownUntilMs);
+    while (this.cooldownUntilEpochMsByRequestKey.size > MAX_COOLDOWN_ENTRIES) {
+      const oldestKey = this.cooldownUntilEpochMsByRequestKey.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      this.cooldownUntilEpochMsByRequestKey.delete(oldestKey);
+    }
   }
 
   /**
@@ -158,27 +243,41 @@ export class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const hasCachedPayload = this.cachedGetPayloadByRequestKey.has(requestKey);
     const knownEtag = this.eTagByGetRequestKey.get(requestKey);
+    let requestGeneration = this.getCacheGeneration;
 
     const send = (includeEtag: boolean) => {
       const requestHeaders: HeadersInit =
         includeEtag && knownEtag && hasCachedPayload
           ? { ...headers, "If-None-Match": knownEtag }
           : headers;
-      return fetch(url, {
+      return this.fetchWithTimeout(url, {
         method: "GET",
         cache: "no-store",
         headers: requestHeaders,
-      });
+      }, {}, DEFAULT_GET_TIMEOUT_MS);
     };
 
     let res = await send(true);
-    if (res.status === 304 && !hasCachedPayload) {
+    if (
+      res.status === 304
+      && (
+        requestGeneration !== this.getCacheGeneration
+        || !this.cachedGetPayloadByRequestKey.has(requestKey)
+      )
+    ) {
       this.eTagByGetRequestKey.delete(requestKey);
+      this.cachedGetPayloadByRequestKey.delete(requestKey);
+      requestGeneration = this.getCacheGeneration;
       res = await send(false);
     }
 
-    if (res.status === 304 && hasCachedPayload) {
+    if (
+      res.status === 304
+      && requestGeneration === this.getCacheGeneration
+      && this.cachedGetPayloadByRequestKey.has(requestKey)
+    ) {
       this.cooldownUntilEpochMsByRequestKey.delete(requestKey);
+      this.touchCachedGetResponse(requestKey);
       return this.cachedGetPayloadByRequestKey.get(requestKey) as T;
     }
 
@@ -194,9 +293,13 @@ export class ApiService {
     this.cooldownUntilEpochMsByRequestKey.delete(requestKey);
     const responseEtag = res.headers.get("ETag");
     const isJsonPayload = res.headers.get("Content-Type")?.includes("application/json") === true;
-    if (res.ok && responseEtag && isJsonPayload) {
-      this.eTagByGetRequestKey.set(requestKey, responseEtag);
-      this.cachedGetPayloadByRequestKey.set(requestKey, payload as unknown);
+    if (
+      res.ok
+      && responseEtag
+      && isJsonPayload
+      && requestGeneration === this.getCacheGeneration
+    ) {
+      this.cacheGetResponse(requestKey, responseEtag, payload as unknown);
     } else if (res.ok && (!responseEtag || !isJsonPayload)) {
       this.eTagByGetRequestKey.delete(requestKey);
       this.cachedGetPayloadByRequestKey.delete(requestKey);
@@ -228,20 +331,26 @@ export class ApiService {
    */
 
   // Schickt POST Request mit den Daten ans backend und kann so zb einen neuen User regisstrieren
-  public async post<T>(endpoint: string, data: unknown): Promise<T> {
+  public async post<T>(
+    endpoint: string,
+    data: unknown,
+    options: ApiRequestOptions = {},
+  ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method: "POST",
       headers: {
         ...this.defaultHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(data),
-    });
-    return this.processResponse<T>(
+    }, options);
+    const payload = await this.processResponse<T>(
       res,
       "An error occurred while posting the data.\n",
     );
+    this.clearCachedGetResponses();
+    return payload;
   }
 
   /**
@@ -252,20 +361,26 @@ export class ApiService {
    */
 
   // Schickt PUT Request um z.b das Passwort zu ändern
-  public async put<T>(endpoint: string, data: unknown): Promise<T> {
+  public async put<T>(
+    endpoint: string,
+    data: unknown,
+    options: ApiRequestOptions = {},
+  ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method: "PUT",
       headers: {
         ...this.defaultHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(data),
-    });
-    return this.processResponse<T>(
+    }, options);
+    const payload = await this.processResponse<T>(
       res,
       "An error occurred while updating the data.\n",
     );
+    this.clearCachedGetResponses();
+    return payload;
   }
 
   /**
@@ -273,16 +388,18 @@ export class ApiService {
    * @param endpoint - The API endpoint (e.g. "/users/123").
    * @returns JSON data of type T.
    */
-  public async delete<T>(endpoint: string): Promise<T> {
+  public async delete<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method: "DELETE",
       headers: this.defaultHeaders,
-    });
-    return this.processResponse<T>(
+    }, options);
+    const payload = await this.processResponse<T>(
       res,
       "An error occurred while deleting the data.\n",
     );
+    this.clearCachedGetResponses();
+    return payload;
   }
 
   private authHeaders(token: string, includeJsonContentType: boolean = false): HeadersInit {
@@ -306,6 +423,7 @@ export class ApiService {
       globalThis.localStorage.removeItem("pendingInitialPeekGameId");
       globalThis.localStorage.removeItem("activeGameStatusSnapshot");
       globalThis.localStorage.removeItem("spectatorMode");
+      this.clearCachedGetResponses();
     } catch {
       // best-effort cleanup only
     }
@@ -336,18 +454,21 @@ export class ApiService {
     endpoint: string,
     data: unknown,
     token: string,
+    options: ApiRequestOptions = {},
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method: "POST",
       headers: this.authHeaders(token, true),
       body: JSON.stringify(data),
-    });
+    }, options);
     try {
-      return await this.processResponse<T>(
+      const payload = await this.processResponse<T>(
         res,
         "An error occurred while posting the data.\n",
       );
+      this.clearCachedGetResponses();
+      return payload;
     } catch (error) {
       this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
       throw error;
@@ -358,18 +479,21 @@ export class ApiService {
     endpoint: string,
     data: unknown,
     token: string,
+    options: ApiRequestOptions = {},
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method: "PUT",
       headers: this.authHeaders(token, true),
       body: JSON.stringify(data),
-    });
+    }, options);
     try {
-      return await this.processResponse<T>(
+      const payload = await this.processResponse<T>(
         res,
         "An error occurred while updating the data.\n",
       );
+      this.clearCachedGetResponses();
+      return payload;
     } catch (error) {
       this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
       throw error;
@@ -380,18 +504,21 @@ export class ApiService {
     endpoint: string,
     data: unknown,
     token: string,
+    options: ApiRequestOptions = {},
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithTimeout(url, {
       method: "PATCH",
       headers: this.authHeaders(token, true),
       body: JSON.stringify(data),
-    });
+    }, options);
     try {
-      return await this.processResponse<T>(
+      const payload = await this.processResponse<T>(
         res,
         "An error occurred while updating the data.\n",
       );
+      this.clearCachedGetResponses();
+      return payload;
     } catch (error) {
       this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
       throw error;
@@ -399,21 +526,24 @@ export class ApiService {
   }
 
   public async deleteWithAuth<T>(
-      endpoint: string,
-      token: string,
-    ): Promise<T> {
-      const url = `${this.baseURL}${endpoint}`;
-      const res = await fetch(url, {
-          method: "DELETE",
-          headers: this.authHeaders(token),
-      });
-        try {
-          return await this.processResponse<T>(
-              res,
-              "An error occurred while deleting the data.\n",
-          );
-      } catch (error) {
-          this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
+    endpoint: string,
+    token: string,
+    options: ApiRequestOptions = {},
+  ): Promise<T> {
+    const url = `${this.baseURL}${endpoint}`;
+    const res = await this.fetchWithTimeout(url, {
+      method: "DELETE",
+      headers: this.authHeaders(token),
+    }, options);
+    try {
+      const payload = await this.processResponse<T>(
+        res,
+        "An error occurred while deleting the data.\n",
+      );
+      this.clearCachedGetResponses();
+      return payload;
+    } catch (error) {
+      this.handleUnauthorized((error as Partial<ApplicationError>)?.status);
       throw error;
     }
   }

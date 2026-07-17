@@ -4,6 +4,9 @@ import path from "node:path";
 
 const MUSIC_FILE_PATTERN = /^music_(\d{2})\.mp3$/i;
 
+export const dynamic = "force-static";
+export const revalidate = false;
+
 function toTrackNumber(fileName: string): number {
   const match = MUSIC_FILE_PATTERN.exec(fileName);
   return match ? Number(match[1]) : 0;
@@ -26,5 +29,12 @@ export async function GET() {
     .sort((left, right) => toTrackNumber(left) - toTrackNumber(right))
     .map((fileName) => fileName.toLowerCase());
 
-  return NextResponse.json({ filenames });
+  return NextResponse.json(
+    { filenames },
+    {
+      headers: {
+        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+      },
+    },
+  );
 }

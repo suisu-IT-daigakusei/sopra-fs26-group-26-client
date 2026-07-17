@@ -260,7 +260,7 @@ const SettingsPage = () => {
       try {
         const response = await fetch("/api/background-options", {
           method: "GET",
-          cache: "no-store",
+          cache: "force-cache",
         });
         if (!response.ok) {
           return;
@@ -722,11 +722,11 @@ const SettingsPage = () => {
     }
 
     const authToken = token.trim();
-    if (authToken) {
-      await apiService.putWithAuth<void>(`/users/${encodeURIComponent(uid)}`, payload, authToken);
-      return;
+    if (!authToken) {
+      router.replace("/login");
+      throw new Error("Your session expired. Please log in again.");
     }
-    await apiService.put<void>(`/users/${encodeURIComponent(uid)}`, payload);
+    await apiService.putWithAuth<void>(`/users/${encodeURIComponent(uid)}`, payload, authToken);
   }, [apiService, router, token, userId]);
 
   const handleColorPriorityChange = (index: number, nextColor: string) => {
@@ -874,7 +874,8 @@ const SettingsPage = () => {
     const password = String(form.getFieldValue("password") ?? "");
     const confirmPassword = String(form.getFieldValue("confirmPassword") ?? "");
 
-    if (!uid) {
+    const authToken = token.trim();
+    if (!uid || !authToken) {
       router.replace("/login");
       return;
     }
@@ -896,7 +897,11 @@ const SettingsPage = () => {
 
     setSavingPassword(true);
     try {
-      await apiService.put(`/users/${encodeURIComponent(uid)}`, { password });
+      await apiService.putWithAuth(
+        `/users/${encodeURIComponent(uid)}`,
+        { password },
+        authToken,
+      );
       message.success("Password updated. Please log in again.");
       clearToken();
       clearUserId();
